@@ -207,6 +207,7 @@ marimo/_lsp/
 __marimo__/
 
 # --- Project-specific ---
+saved_figures_and_videos/
 *.autosave.ipynb
 *.nbconvert.ipynb
 *.bak

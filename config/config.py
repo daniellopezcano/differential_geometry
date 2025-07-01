@@ -1,0 +1,1 @@
+save_dir = "/home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/learning_cosmology/differential_geometry/saved_figures_and_videos"
