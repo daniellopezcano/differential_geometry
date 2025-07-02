@@ -1,13 +1,20 @@
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib import cm, colors as mcolors, tri
+from matplotlib.patches import FancyArrowPatch, Patch
+from matplotlib.tri import Triangulation
 from mpl_toolkits.mplot3d import proj3d
-from matplotlib.patches import FancyArrowPatch
-from matplotlib.patches import Patch
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from mpl_toolkits.mplot3d.art3d import Line3DCollection
+from matplotlib.colors import Normalize
+from matplotlib.collections import LineCollection
+
+import numpy as np
 import jax
 import jax.numpy as jnp
+
 from shapely.geometry import Polygon, Point
-import numpy as np
-import matplotlib.colors as mcolors
-import matplotlib.cm as cm
+
 
 class Arrow3D(FancyArrowPatch):
     """
@@ -141,59 +148,96 @@ def plot_manifold_surface(
     ax,
     surface_manifold,
     resolution=100,
-    xmin=-jnp.pi,
-    xmax=jnp.pi,
-    ymin=-jnp.pi,
-    ymax=jnp.pi,
+    xmin=-jnp.pi, xmax=jnp.pi,
+    ymin=-jnp.pi, ymax=jnp.pi,
     color="skyblue",
     alpha=0.2,
     edgecolor="none",
     label=None,
     label_position="center",
-    label_fontsize=12
+    label_fontsize=12,
+    function=None,
+    cmap="viridis",
+    label_function=None
 ):
     """
     Plot the manifold surface over a rectangular region in parameter space.
+    Optionally color by a scalar function defined on the manifold.
 
     Args:
         ax: Matplotlib 3D axis.
-        surface_manifold: The manifold object with an .embed() method.
-        resolution: Number of points per axis (int).
-        xmin, xmax: Bounds in x param direction.
-        ymin, ymax: Bounds in y param direction.
-        color: Surface color.
-        alpha: Surface transparency.
-        edgecolor: Edge color of the mesh (use 'none' to disable grid lines).
-        label: Optional LaTeX string to label the surface (e.g., r"$\mathcal{M}$"), or None.
-        label_position: One of ["center", "top", "bottom", "left", "right"].
-        label_fontsize: Font size for the label.
+        surface_manifold: Manifold object.
+        resolution: Number of points per axis.
+        xmin, xmax, ymin, ymax: Parameter space limits.
+        color: Surface color if function is not provided.
+        alpha: Transparency.
+        edgecolor: Mesh line color.
+        label: Optional LaTeX label for the surface.
+        label_position: ["center", "top", "bottom", "left", "right"].
+        label_fontsize: Font size for label.
+        function: Optional scalar Function object to colormap.
+        cmap: Colormap (str or matplotlib colormap).
+        label_function: Label for the colorbar.
 
     Returns:
-        The plotted surface object (from ax.plot_surface()).
+        surface: The plotted surface object.
     """
 
     # === Create grid in parameter space ===
     x = jnp.linspace(xmin, xmax, resolution)
     y = jnp.linspace(ymin, ymax, resolution)
-    X, Y = jnp.meshgrid(x, y)
+    XX, YY = jnp.meshgrid(x, y)
+    param_points = jnp.stack([XX.ravel(), YY.ravel()], axis=-1)
 
-    param_points = jnp.stack([X.flatten(), Y.flatten()], axis=-1)
+    # === Embed points ===
+    embedded = surface_manifold.embed(param_points)
+    X = embedded[:, 0].reshape(XX.shape)
+    Y = embedded[:, 1].reshape(XX.shape)
+    Z = embedded[:, 2].reshape(XX.shape)
 
-    # === Evaluate manifold embedding ===
-    Z = surface_manifold.embed(param_points)[:, 2].reshape(X.shape)
+    # === Compute function for coloring if provided ===
+    if function is not None:
+        # === Compute normalized function values ===
+        F_vals = function.evaluate_in_param_space(param_points).reshape(XX.shape)
+        norm = mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max()))
+        cmap_obj = cm.get_cmap(cmap) if isinstance(cmap, str) else cmap
+        face_colors = cmap_obj(norm(F_vals))
 
-    # === Plot surface ===
-    surface = ax.plot_surface(
-        X, Y, Z,
-        color=color,
-        alpha=alpha,
-        edgecolor=edgecolor
-    )
+        # === Plot the surface with facecolors ===
+        surface = ax.plot_surface(
+            X, Y, Z,
+            facecolors=face_colors,
+            rstride=1, cstride=1,
+            edgecolor=edgecolor,
+            linewidth=0.,
+            antialiased=False,
+            shade=False,  # Disable matplotlib auto-shading (since colormap provides color)
+            alpha=alpha
+        )
+
+        # Add colorbar
+        mappable = cm.ScalarMappable(
+            norm=mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max())),
+            cmap=cmap
+        )
+        mappable.set_array(F_vals)
+        cbar = plt.colorbar(mappable, ax=ax, shrink=0.6, pad=0.05)
+        cbar.set_label(label_function or "Function value", fontsize=12)
+
+    else:
+        surface = ax.plot_surface(
+            X, Y, Z,
+            color=color,
+            rstride=1, cstride=1,
+            edgecolor=edgecolor,
+            alpha=alpha,
+            antialiased=True,
+            linewidth=0.2 if edgecolor != "none" else 0
+        )
 
     # === Add label (optional) ===
     if label is not None:
-        # Flatten data for label positioning
-        X_flat, Y_flat, Z_flat = X.flatten(), Y.flatten(), Z.flatten()
+        X_flat, Y_flat, Z_flat = X.ravel(), Y.ravel(), Z.ravel()
 
         if label_position == "center":
             pos = (jnp.mean(X_flat), jnp.mean(Y_flat), jnp.mean(Z_flat))
@@ -216,7 +260,7 @@ def plot_manifold_surface(
             pos[0], pos[1], pos[2],
             label,
             fontsize=label_fontsize,
-            color=color
+            color="black" if function is not None else color
         )
 
     return surface
@@ -533,6 +577,124 @@ def plot_curve_on_manifold(
             color=color
         )
 
+def plot_colored_curve_directional_derivative(
+    ax,
+    curve,
+    scalar_function,
+    lambda_range=(-jnp.pi, jnp.pi),
+    n_points=300,
+    cmap="plasma",
+    linewidth=3.0,
+    label=None,
+    label_fontsize=14,
+    label_offset=(0.1, 0.1, 0.2),
+    label_position="center",
+    method="autodiff",
+    inset_colorbar=True,
+    inset_position=(0.02, 0.02),   # (x, y) in axes fraction
+    inset_size=(0.25, 0.02),       # (width, height) in axes fraction
+    colorbar_orientation="horizontal",  # "horizontal" or "vertical"
+    label_colorbar=r"$\partial_\lambda f$",
+    label_colorbar_position="top",       # "top", "bottom", "left", "right"
+    inset_box_alpha=0.8,                 # Opacity for box
+    inset_box_color="white",             # Background box color
+    inset_border_color="black"           # Border color
+):
+    """
+    Plot a curve colored by the directional derivative of a function.
+
+    Includes an optional colorbar inset placed using coordinates relative to the plot.
+    """
+
+    # === Sample curve ===
+    lambdas = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+    points = curve.evaluate_on_manifold(lambdas)
+
+    # === Compute directional derivatives ===
+    derivatives = jnp.array([
+        scalar_function.directional_derivative_along_curve(curve, float(lmb), method=method)
+        for lmb in lambdas
+    ])
+
+    # === Normalize colormap ===
+    norm = mcolors.Normalize(vmin=float(derivatives.min()), vmax=float(derivatives.max()))
+    cmap_obj = cm.get_cmap(cmap)
+    colors = cmap_obj(norm(derivatives))
+
+    # === Build line segments ===
+    segments = [[points[i], points[i + 1]] for i in range(len(points) - 1)]
+
+    line_collection = Line3DCollection(
+        segments, colors=colors[:-1], linewidths=linewidth, alpha=0.95
+    )
+    ax.add_collection3d(line_collection)
+
+    # === Plot label ===
+    if label is not None:
+        idx = (
+            len(points) // 2 if label_position == "center"
+            else 0 if label_position == "start"
+            else -1
+        )
+        p_label = points[idx]
+        dx, dy, dz = label_offset
+        ax.text(
+            p_label[0] + dx, p_label[1] + dy, p_label[2] + dz,
+            label, fontsize=label_fontsize, color="black"
+        )
+
+    # === Add inset colorbar ===
+    if inset_colorbar:
+        cbax = inset_axes(
+            ax,
+            width=inset_size[0],
+            height=inset_size[1],
+            loc='lower left',
+            bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+            bbox_transform=ax.transAxes,
+            borderpad=0
+        )
+
+        mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+        mappable.set_array(derivatives)
+
+        cbar = plt.colorbar(
+            mappable,
+            cax=cbax,
+            orientation=colorbar_orientation
+        )
+
+        cbar.ax.tick_params(labelsize=8)
+        cbar.outline.set_visible(False)
+
+        # === Background box ===
+        for spine in cbax.spines.values():
+            spine.set_edgecolor(inset_border_color)
+            spine.set_linewidth(1.0)
+
+        cbax.set_facecolor(inset_box_color)
+        cbax.patch.set_alpha(inset_box_alpha)
+
+        # === Place colorbar label ===
+        if label_colorbar:
+            if colorbar_orientation == "horizontal":
+                if label_colorbar_position == "top":
+                    cbax.set_title(label_colorbar, fontsize=10, pad=4)
+                elif label_colorbar_position == "bottom":
+                    cbax.set_xlabel(label_colorbar, fontsize=10, labelpad=4)
+                else:
+                    raise ValueError("Label position for horizontal colorbar must be 'top' or 'bottom'.")
+            else:  # vertical
+                if label_colorbar_position == "right":
+                    cbax.set_ylabel(label_colorbar, fontsize=10, rotation=-90, labelpad=10)
+                elif label_colorbar_position == "left":
+                    cbax.yaxis.set_label_position("left")
+                    cbax.set_ylabel(label_colorbar, fontsize=10, rotation=90, labelpad=10)
+                else:
+                    raise ValueError("Label position for vertical colorbar must be 'left' or 'right'.")
+
+    return line_collection
+
 def compute_label_position(coords, position="center", offset=(0.2, 0.2)):
     center = jnp.mean(coords, axis=0)
 
@@ -581,6 +743,81 @@ def plot_tangent_plane(ax, p_xyz, tangent_vec1, tangent_vec2,
     X, Y, Z = plane[0], plane[1], plane[2]
 
     ax.plot_surface(X, Y, Z, color=color, alpha=alpha, edgecolor="none")
+
+def plot_dual_plane_pair(
+    ax,
+    p_xyz,
+    t1,
+    t2,
+    z_shift=1.0,
+    scale=1.0,
+    plane_color="darkorange",
+    plane_alpha=0.35,
+    label=r"$T_p^*\mathcal{M}$",
+    label_offset=(0.4, 0.4, 0.15),
+    label_fontsize=16,
+    arrow_color="black",
+    arrow_alpha=0.8,
+    arrow_lw=1.0,
+    arrow_mutation_scale=20
+):
+    """
+    Plot a cotangent plane shifted from a tangent plane, with connecting arrows.
+
+    Args:
+        ax: Matplotlib 3D axis.
+        p_xyz: Center point of the tangent plane (array-like, shape (3,)).
+        t1, t2: Basis vectors of the tangent plane (array-like, shape (3,)).
+        z_shift: Vertical shift along z to place the cotangent plane.
+        scale: Size of the planes.
+        plane_color: Color of the cotangent plane.
+        plane_alpha: Transparency of the plane.
+        label: Text label for the cotangent plane.
+        label_offset: Offset for label positioning (dx, dy, dz).
+        label_fontsize: Font size for label.
+        arrow_color: Color of connecting arrows.
+        arrow_alpha: Transparency of arrows.
+        arrow_lw: Line width of arrows.
+        arrow_mutation_scale: Arrow head scale.
+    """
+    # === Compute cotangent plane center ===
+    p_cotangent = p_xyz + jnp.array([0.0, 0.0, z_shift])
+
+    # === Plot cotangent plane ===
+    plot_tangent_plane(ax, p_cotangent, t1, t2, size=scale, color=plane_color, alpha=plane_alpha)
+
+    # === Add label ===
+    ax.text(
+        p_cotangent[0] + label_offset[0],
+        p_cotangent[1] + label_offset[1],
+        p_cotangent[2] + label_offset[2],
+        label,
+        fontsize=label_fontsize,
+        color=plane_color
+    )
+
+    # === Compute corners of both planes ===
+    corner_offsets = [
+        -t1 * scale / 2 - t2 * scale / 2,
+        -t1 * scale / 2 + t2 * scale / 2,
+        +t1 * scale / 2 - t2 * scale / 2,
+        +t1 * scale / 2 + t2 * scale / 2,
+    ]
+    corners_TpM = [p_xyz + offset for offset in corner_offsets]
+    corners_TpM_star = [p_cotangent + offset for offset in corner_offsets]
+
+    # === Plot connecting arrows ===
+    for pt_from, pt_to in zip(corners_TpM, corners_TpM_star):
+        ax.add_artist(Arrow3D(
+            [pt_from[0], pt_to[0]],
+            [pt_from[1], pt_to[1]],
+            [pt_from[2], pt_to[2]],
+            mutation_scale=arrow_mutation_scale,
+            arrowstyle="->",
+            lw=arrow_lw,
+            color=arrow_color,
+            alpha=arrow_alpha
+        ))
 
 def compute_chart_intersection_polygon(chart1, chart2):
     """
@@ -708,6 +945,125 @@ def plot_curve_in_chart(
             ha="center", va="center"
         )
 
+def plot_colored_curve_directional_derivative_in_chart(
+    ax,
+    chart,
+    curve,
+    scalar_function,
+    lambda_range=(-jnp.pi, jnp.pi),
+    n_points=300,
+    cmap="plasma",
+    linewidth=3.0,
+    label=None,
+    label_fontsize=14,
+    label_offset=(0.2, 0.2),
+    label_position="center",
+    method="autodiff",
+    inset_colorbar=True,
+    inset_position=(0.02, 0.02),   # (x, y) in axes fraction
+    inset_size=(0.25, 0.02),       # (width, height) in axes fraction
+    colorbar_orientation="horizontal",  # "horizontal" or "vertical"
+    label_colorbar=r"$\partial_\lambda f$",
+    label_colorbar_position="top",       # "top", "bottom", "left", "right"
+    inset_box_alpha=0.8,                 # Opacity for box
+    inset_box_color="white",             # Background box color
+    inset_border_color="black"           # Border color
+):
+    """
+    Plot a curve in chart coordinates colored by the directional derivative of a function.
+
+    Includes an optional colorbar inset placed using coordinates relative to the plot.
+    """
+
+    # === Sample curve ===
+    lambdas = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+    param_points = curve.evaluate_in_param_space(lambdas)
+    points_chart = chart.map_to_chart(param_points)
+
+    # === Compute directional derivatives ===
+    derivatives = jnp.array([
+        scalar_function.directional_derivative_along_curve(curve, float(lmb), method=method)
+        for lmb in lambdas
+    ])
+
+    # === Normalize colormap ===
+    norm = Normalize(vmin=float(derivatives.min()), vmax=float(derivatives.max()))
+    cmap_obj = cm.get_cmap(cmap)
+    colors = cmap_obj(norm(derivatives))
+
+    # === Build line segments ===
+    segments = [[points_chart[i], points_chart[i + 1]] for i in range(len(points_chart) - 1)]
+
+    line_collection = LineCollection(
+        segments, colors=colors[:-1], linewidths=linewidth, alpha=0.95, zorder=4
+    )
+    ax.add_collection(line_collection)
+
+    # === Plot label ===
+    if label is not None:
+        idx = (
+            len(points_chart) // 2 if label_position == "center"
+            else 0 if label_position == "start"
+            else -1
+        )
+        pos = points_chart[idx] + jnp.array(label_offset)
+
+        ax.text(
+            pos[0], pos[1], label,
+            fontsize=label_fontsize, color="black",
+            ha="center", va="center"
+        )
+
+    # === Add inset colorbar ===
+    if inset_colorbar:
+        cbax = inset_axes(
+            ax,
+            width=inset_size[0],
+            height=inset_size[1],
+            loc='lower left',
+            bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+            bbox_transform=ax.transAxes,
+            borderpad=0
+        )
+
+        mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+        mappable.set_array(derivatives)
+
+        cbar = mpl.colorbar.ColorbarBase(
+            cbax, cmap=cmap_obj, norm=norm, orientation=colorbar_orientation
+        )
+
+        cbar.ax.tick_params(labelsize=8)
+        cbar.outline.set_visible(False)
+
+        # === Background box ===
+        for spine in cbax.spines.values():
+            spine.set_edgecolor(inset_border_color)
+            spine.set_linewidth(1.0)
+
+        cbax.set_facecolor(inset_box_color)
+        cbax.patch.set_alpha(inset_box_alpha)
+
+        # === Place colorbar label ===
+        if label_colorbar:
+            if colorbar_orientation == "horizontal":
+                if label_colorbar_position == "top":
+                    cbax.set_title(label_colorbar, fontsize=10, pad=4)
+                elif label_colorbar_position == "bottom":
+                    cbax.set_xlabel(label_colorbar, fontsize=10, labelpad=4)
+                else:
+                    raise ValueError("Label position for horizontal colorbar must be 'top' or 'bottom'.")
+            else:  # vertical
+                if label_colorbar_position == "right":
+                    cbax.set_ylabel(label_colorbar, fontsize=10, rotation=-90, labelpad=10)
+                elif label_colorbar_position == "left":
+                    cbax.yaxis.set_label_position("left")
+                    cbax.set_ylabel(label_colorbar, fontsize=10, rotation=90, labelpad=10)
+                else:
+                    raise ValueError("Label position for vertical colorbar must be 'left' or 'right'.")
+
+    return line_collection
+
 def plot_tangent_vectors_in_chart(
     ax, chart, curve,
     lambda_range=(-jnp.pi, jnp.pi), n_points=300,
@@ -787,50 +1143,49 @@ def plot_vector_field_on_manifold(
     arrow_style=None,
     label=None,
     label_fontsize=14,
-    return_legend_handle=False
+    inset_position=(0.02, 0.02),  # bottom-left corner (x, y)
+    inset_size=(0.25, 0.02),      # width, height
+    inset_orientation="horizontal"
 ):
     """
-    Plot a vector field on the manifold as arrows.
+    Plot a vector field on the manifold with optional colormap inset.
 
     Args:
         ax: Matplotlib 3D axis.
-        field: A Field object defined on the manifold.
-        grid_resolution: Number of points along each parameter axis.
-        xlim, ylim: Tuple limits in parameter space.
-        vector_scale: Scale factor for arrow lengths.
-        color: Fixed color (ignored if colormap is provided).
-        colormap: Matplotlib colormap name or object (optional).
-        arrow_style: Dict with additional Arrow3D style parameters.
-        label: Optional label (e.g., r"$\chi$").
+        field: Field object defined on the manifold.
+        grid_resolution: Mesh resolution for sampling.
+        xlim, ylim: Bounds in parameter space.
+        vector_scale: Arrow length scaling.
+        color: Fixed color if colormap is not used.
+        colormap: Matplotlib colormap name or object.
+        arrow_style: Dict for customizing arrows.
+        label: Optional label for the inset (e.g. "$X$").
         label_fontsize: Font size for label.
-        return_legend_handle: If True, returns a legend handle (Patch).
-    Returns:
-        Patch handle for legend if return_legend_handle is True, else None.
+        inset_position: (x, y) — position of the inset box in axes fraction.
+        inset_size: (width, height) — size of the inset box in axes fraction.
+        inset_orientation: 'horizontal' or 'vertical'.
     """
 
-    # === Build meshgrid in parameter space ===
+    # === Build meshgrid ===
     x_vals = jnp.linspace(xlim[0], xlim[1], grid_resolution)
     y_vals = jnp.linspace(ylim[0], ylim[1], grid_resolution)
     XX, YY = jnp.meshgrid(x_vals, y_vals)
     param_points = jnp.stack([XX.ravel(), YY.ravel()], axis=-1)
 
-    # === Compute points and vectors on manifold ===
-    points_on_manifold = field.manifold.embed(param_points)  # (N, 3)
-    vectors_ambient = field.evaluate_on_manifold(param_points)  # (N, 3)
+    # === Compute field ===
+    points_on_manifold = field.manifold.embed(param_points)
+    vectors_ambient = field.evaluate_on_manifold(param_points)
 
-    # Normalize vectors
     norms = jnp.linalg.norm(vectors_ambient, axis=1, keepdims=True)
     unit_vectors = vectors_ambient / norms
 
-    # === Prepare colormap ===
+    # === Colormap setup ===
     if colormap is not None:
         cmap = cm.get_cmap(colormap) if isinstance(colormap, str) else colormap
         num_points = param_points.shape[0]
         colors = cmap(np.linspace(0, 1, num_points))
-        color_sample = cmap(0.6)
     else:
         colors = [color] * param_points.shape[0]
-        color_sample = color
 
     # === Arrow style ===
     default_arrow_style = dict(
@@ -852,12 +1207,31 @@ def plot_vector_field_on_manifold(
             **default_arrow_style
         ))
 
-    # === Create legend handle ===
-    if label is not None and return_legend_handle:
-        legend_patch = Patch(facecolor=color_sample, edgecolor="k", label=label)
-        return legend_patch
+    # === Add colormap inset ===
+    if colormap is not None and label is not None:
+        inset_ax = inset_axes(
+            ax,
+            width=inset_size[0],
+            height=inset_size[1],
+            loc='lower left',
+            bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+            bbox_transform=ax.transAxes,
+            borderpad=0
+        )
 
-    return None
+        norm = Normalize(vmin=0, vmax=1)
+        cb = plt.colorbar(
+            cm.ScalarMappable(norm=norm, cmap=cmap),
+            cax=inset_ax,
+            orientation=inset_orientation
+        )
+        cb.set_ticks([])
+        if inset_orientation == "horizontal":
+            cb.ax.set_xlabel(label, fontsize=label_fontsize, labelpad=2)
+        else:
+            cb.ax.set_ylabel(label, fontsize=label_fontsize, labelpad=2)
+
+        cb.outline.set_visible(False)
 
 def plot_vector_field_in_chart(
     ax,
@@ -868,25 +1242,33 @@ def plot_vector_field_in_chart(
     colormap=None,
     arrow_style=None,
     label=None,
-    label_fontsize=14,
-    return_legend_handle=False
+    label_fontsize=10,
+    inset_position=(0.02, 0.02),
+    inset_size=(0.25, 0.02),
+    inset_orientation="horizontal",
+    inset_box_alpha=0.8,
+    inset_box_color="white",
+    inset_border_color="black"
 ):
     """
-    Plot a vector field in chart coordinates (2D).
+    Plot a vector field in chart coordinates (2D) with optional colorbar inset.
 
     Args:
         ax: Matplotlib 2D axis.
-        points_in_chart: Array (N, 2) of positions in chart coordinates.
-        vectors_in_chart: Array (N, 2) of corresponding vector components.
+        points_in_chart: (N, 2) array of positions in chart coordinates.
+        vectors_in_chart: (N, 2) array of vector components.
         vector_scale: Scale factor for arrow length.
-        color: Arrow color (ignored if colormap is provided).
+        color: Fixed color (ignored if colormap is provided).
         colormap: Matplotlib colormap name or object (optional).
-        arrow_style: Dict of arrow style parameters.
-        label: Optional label (e.g. r"$\chi$").
+        arrow_style: Dict of arrow style parameters (overrides defaults).
+        label: Label for the colormap inset (e.g., r"$X$").
         label_fontsize: Font size for the label.
-        return_legend_handle: If True, returns a legend handle (Patch).
-    Returns:
-        Patch handle for legend if return_legend_handle is True, else None.
+        inset_position: (x, y) position of inset (axes fraction).
+        inset_size: (width, height) size of inset (axes fraction).
+        inset_orientation: 'horizontal' or 'vertical'.
+        inset_box_alpha: Opacity of the background box.
+        inset_box_color: Background box color.
+        inset_border_color: Border color of the box.
     """
 
     N = points_in_chart.shape[0]
@@ -895,12 +1277,10 @@ def plot_vector_field_in_chart(
     if colormap is not None:
         cmap = cm.get_cmap(colormap) if isinstance(colormap, str) else colormap
         colors = cmap(np.linspace(0, 1, N))
-        color_sample = cmap(0.6)
     else:
         colors = [color] * N
-        color_sample = color
 
-    # === Arrow style defaults ===
+    # === Arrow style handling ===
     default_arrow_style = dict(
         head_width=0.1,
         head_length=0.15,
@@ -908,6 +1288,7 @@ def plot_vector_field_in_chart(
         alpha=0.6,
         length_includes_head=True
     )
+    # If arrow_style provided, override defaults
     if arrow_style is not None:
         default_arrow_style.update(arrow_style)
 
@@ -920,9 +1301,102 @@ def plot_vector_field_in_chart(
             **default_arrow_style
         )
 
-    # === Return legend handle if needed ===
-    if label is not None and return_legend_handle:
-        legend_patch = Patch(facecolor=color_sample, edgecolor="k", label=label)
-        return legend_patch
+    # === Add colormap inset ===
+    if colormap is not None and label is not None:
+        inset_ax = inset_axes(
+            ax,
+            width=inset_size[0],
+            height=inset_size[1],
+            loc='lower left',
+            bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+            bbox_transform=ax.transAxes,
+            borderpad=0
+        )
 
-    return None
+        norm = Normalize(vmin=0, vmax=1)
+        cb = plt.colorbar(
+            cm.ScalarMappable(norm=norm, cmap=cmap),
+            cax=inset_ax,
+            orientation=inset_orientation
+        )
+        cb.set_ticks([])
+        cb.outline.set_visible(False)
+
+        if inset_orientation == "horizontal":
+            cb.ax.set_xlabel(label, fontsize=label_fontsize, labelpad=2)
+        else:
+            cb.ax.set_ylabel(label, fontsize=label_fontsize, labelpad=2)
+
+        # === Background box ===
+        for spine in inset_ax.spines.values():
+            spine.set_edgecolor(inset_border_color)
+            spine.set_linewidth(1.0)
+
+        inset_ax.set_facecolor(inset_box_color)
+        inset_ax.patch.set_alpha(inset_box_alpha)
+
+def plot_function_in_chart(
+    ax,
+    chart,
+    function,
+    param_sampling_bounds,
+    chart_xlim,
+    chart_ylim,
+    resolution=200,
+    cmap="viridis",
+    alpha=0.8,
+    label_function=None,
+    shading="gouraud"
+):
+    """
+    Plot the scalar function values over a chart using Delaunay triangulation.
+
+    Args:
+        ax: Matplotlib 2D axis.
+        chart: Chart object.
+        function: Function object defined on the manifold.
+        param_sampling_bounds: ((xmin, xmax), (ymin, ymax)) in parameter space.
+        chart_xlim: Plot limits in chart x direction.
+        chart_ylim: Plot limits in chart y direction.
+        resolution: Number of grid points per axis.
+        cmap: Colormap.
+        alpha: Transparency.
+        label_function: Label for the colorbar (optional).
+        shading: 'gouraud' (smooth) or 'flat'.
+    """
+
+    # === Build sampling grid in parameter space ===
+    (x_min, x_max), (y_min, y_max) = param_sampling_bounds
+    xv = jnp.linspace(x_min, x_max, resolution)
+    yv = jnp.linspace(y_min, y_max, resolution)
+    XX, YY = jnp.meshgrid(xv, yv)
+    param_points = jnp.stack([XX.ravel(), YY.ravel()], axis=-1)
+
+    # === Map to chart coordinates ===
+    chart_points = chart.map_to_chart(param_points)
+
+    # === Evaluate function ===
+    F_vals = function.evaluate_in_param_space(param_points)
+
+    # === Triangulate in chart space ===
+    triang = Triangulation(chart_points[:, 0], chart_points[:, 1])
+
+    # === Plot ===
+    tpc = ax.tripcolor(
+        triang,
+        F_vals,
+        cmap=cmap,
+        shading=shading,
+        alpha=alpha
+    )
+
+    # === Colorbar ===
+    cbar = plt.colorbar(tpc, ax=ax, shrink=0.8, pad=0.02)
+    if label_function:
+        cbar.set_label(label_function, fontsize=12)
+
+    # === Plot limits ===
+    ax.set_xlim(chart_xlim)
+    ax.set_ylim(chart_ylim)
+
+    return tpc
