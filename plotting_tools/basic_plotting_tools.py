@@ -43,439 +43,56 @@ class Arrow3D(FancyArrowPatch):
         self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
         return np.mean(zs)  # Use numpy mean, not jnp
 
-# === Plot Setup Function ===
-def create_3d_axis_for_manifold(
-    xlim, ylim, zlim,
-    axis_labels=None,   # <- Default is None → no arrows
-    figsize=(8, 8),
-    coord_arrow_shift=0.5,
-    coord_arrow_style=None,
-    axis_label_fontsize=14
-):
-    """
-    Create a 3D matplotlib figure with manifold plotting conventions.
 
-    Args:
-        xlim, ylim, zlim: Tuple of (min, max) for each axis.
-        axis_labels: None → no coordinate arrows;
-                     or tuple like ('x', 'y', 'z') to draw them with labels.
-        figsize: Figure size in inches.
-        coord_arrow_shift: Shift to position coordinate arrows.
-        coord_arrow_style: Dict for customizing arrow appearance.
-        axis_label_fontsize: Font size for axis labels.
-
-    Returns:
-        fig, ax: Matplotlib figure and axis.
-    """
-
-    if coord_arrow_style is None:
-        coord_arrow_style = dict(
-            mutation_scale=20,
-            arrowstyle='-|>',
-            color='black',
-            linewidth=1.5
-        )
-
-    # === Create figure and 3D axis ===
-    fig = plt.figure(figsize=figsize)
-    ax = fig.add_subplot(111, projection='3d')
-
-    # === Set limits ===
-    ax.set_xlim(xlim)
-    ax.set_ylim(ylim)
-    ax.set_zlim(zlim)
-
-    # === Hide grid, ticks, panes ===
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_zticks([])
-    ax.set_axis_off()
-    ax.grid(False)
-
-    # === Optional: Coordinate arrows ===
-    if axis_labels is not None:
-        x_min, x_max = xlim
-        y_min, y_max = ylim
-        z_min, z_max = zlim
-
-        # X arrow
-        ax.add_artist(Arrow3D(
-            [x_min - coord_arrow_shift, x_min - coord_arrow_shift],
-            [y_min - coord_arrow_shift, y_max/4 - coord_arrow_shift],
-            [z_min - coord_arrow_shift, 0 - coord_arrow_shift],
-            **coord_arrow_style))
-
-        # Y arrow
-        ax.add_artist(Arrow3D(
-            [x_min - coord_arrow_shift, x_max/4 - coord_arrow_shift],
-            [y_min - coord_arrow_shift, y_min - coord_arrow_shift],
-            [z_min - coord_arrow_shift, 0 - coord_arrow_shift],
-            **coord_arrow_style))
-
-        # Z arrow
-        ax.add_artist(Arrow3D(
-            [x_min - coord_arrow_shift, x_min - coord_arrow_shift],
-            [y_min - coord_arrow_shift, y_min - coord_arrow_shift],
-            [z_min - coord_arrow_shift, z_max/2 - coord_arrow_shift],
-            **coord_arrow_style))
-
-        # Labels
-        ax.text(
-            x_min - coord_arrow_shift,
-            y_max/4 - coord_arrow_shift,
-            0 - coord_arrow_shift,
-            f"${axis_labels[0]}$",
-            fontsize=axis_label_fontsize
-        )
-        ax.text(
-            x_max/4 - coord_arrow_shift,
-            y_min - coord_arrow_shift,
-            0 - coord_arrow_shift,
-            f"${axis_labels[1]}$",
-            fontsize=axis_label_fontsize
-        )
-        ax.text(
-            x_min - coord_arrow_shift,
-            y_min - coord_arrow_shift,
-            z_max/2 - coord_arrow_shift,
-            f"${axis_labels[2]}$",
-            fontsize=axis_label_fontsize
-        )
-
-    return fig, ax
-
-def plot_manifold_surface(
+def plot_tangent_planes(
     ax,
-    surface_manifold,
-    resolution=100,
-    xmin=-jnp.pi, xmax=jnp.pi,
-    ymin=-jnp.pi, ymax=jnp.pi,
-    color="skyblue",
-    alpha=0.2,
-    edgecolor="none",
-    label=None,
-    label_position="center",
-    label_fontsize=12,
-    function=None,
-    cmap="viridis",
-    label_function=None
+    embedded_points,
+    jacobians,
+    size=1.0,
+    color="lightgray",
+    alpha=0.5,
+    resolution=10,
 ):
     """
-    Plot the manifold surface over a rectangular region in parameter space.
-    Optionally color by a scalar function defined on the manifold.
+    Plot tangent planes in 3D for multiple manifold points.
 
     Args:
         ax: Matplotlib 3D axis.
-        surface_manifold: Manifold object.
-        resolution: Number of points per axis.
-        xmin, xmax, ymin, ymax: Parameter space limits.
-        color: Surface color if function is not provided.
-        alpha: Transparency.
-        edgecolor: Mesh line color.
-        label: Optional LaTeX label for the surface.
-        label_position: ["center", "top", "bottom", "left", "right"].
-        label_fontsize: Font size for label.
-        function: Optional scalar Function object to colormap.
-        cmap: Colormap (str or matplotlib colormap).
-        label_function: Label for the colorbar.
-
-    Returns:
-        surface: The plotted surface object.
+        embedded_points: Array (N, 3) — embedded base points on the manifold.
+        jacobians: Array (N, 2, 3) — tangent vectors at each point.
+        size: Size scaling for each plane.
+        color: Plane surface color.
+        alpha: Plane surface transparency.
+        resolution: Grid resolution for the plane surface.
     """
+    N, D = embedded_points.shape
+    _, param_dim, D2 = jacobians.shape
+    assert D == D2 == 3, "This function only supports ambient_dim == 3."
+    assert param_dim == 2, "Only defined for 2D parameter spaces."
 
-    # === Create grid in parameter space ===
-    x = jnp.linspace(xmin, xmax, resolution)
-    y = jnp.linspace(ymin, ymax, resolution)
-    XX, YY = jnp.meshgrid(x, y)
-    param_points = jnp.stack([XX.ravel(), YY.ravel()], axis=-1)
+    s = np.linspace(-size, size, resolution)
+    t = np.linspace(-size, size, resolution)
+    S, T = np.meshgrid(s, t)
 
-    # === Embed points ===
-    embedded = surface_manifold.embed(param_points)
-    X = embedded[:, 0].reshape(XX.shape)
-    Y = embedded[:, 1].reshape(XX.shape)
-    Z = embedded[:, 2].reshape(XX.shape)
+    for i in range(N):
+        p_xyz = np.array(embedded_points[i])
+        v1 = np.array(jacobians[i, 0])
+        v2 = np.array(jacobians[i, 1])
 
-    # === Compute function for coloring if provided ===
-    if function is not None:
-        # === Compute normalized function values ===
-        F_vals = function.evaluate_in_param_space(param_points).reshape(XX.shape)
-        norm = mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max()))
-        cmap_obj = cm.get_cmap(cmap) if isinstance(cmap, str) else cmap
-        face_colors = cmap_obj(norm(F_vals))
-
-        # === Plot the surface with facecolors ===
-        surface = ax.plot_surface(
-            X, Y, Z,
-            facecolors=face_colors,
-            rstride=1, cstride=1,
-            edgecolor=edgecolor,
-            linewidth=0.,
-            antialiased=False,
-            shade=False,  # Disable matplotlib auto-shading (since colormap provides color)
-            alpha=alpha
+        plane = (
+            p_xyz.reshape(3, 1, 1)
+            + S * v1.reshape(3, 1, 1)
+            + T * v2.reshape(3, 1, 1)
         )
 
-        # Add colorbar
-        mappable = cm.ScalarMappable(
-            norm=mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max())),
-            cmap=cmap
-        )
-        mappable.set_array(F_vals)
-        cbar = plt.colorbar(mappable, ax=ax, shrink=0.6, pad=0.05)
-        cbar.set_label(label_function or "Function value", fontsize=12)
+        X, Y, Z = plane[0], plane[1], plane[2]
+        ax.plot_surface(X, Y, Z, color=color, alpha=alpha, edgecolor="none")
 
-    else:
-        surface = ax.plot_surface(
-            X, Y, Z,
-            color=color,
-            rstride=1, cstride=1,
-            edgecolor=edgecolor,
-            alpha=alpha,
-            antialiased=True,
-            linewidth=0.2 if edgecolor != "none" else 0
-        )
 
-    # === Add label (optional) ===
-    if label is not None:
-        X_flat, Y_flat, Z_flat = X.ravel(), Y.ravel(), Z.ravel()
 
-        if label_position == "center":
-            pos = (jnp.mean(X_flat), jnp.mean(Y_flat), jnp.mean(Z_flat))
-        elif label_position == "top":
-            idx = jnp.argmax(Z_flat)
-            pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-        elif label_position == "bottom":
-            idx = jnp.argmin(Z_flat)
-            pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-        elif label_position == "right":
-            idx = jnp.argmax(X_flat)
-            pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-        elif label_position == "left":
-            idx = jnp.argmin(X_flat)
-            pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-        else:
-            raise ValueError(f"Invalid label_position: {label_position}")
 
-        ax.text(
-            pos[0], pos[1], pos[2],
-            label,
-            fontsize=label_fontsize,
-            color="black" if function is not None else color
-        )
 
-    return surface
 
-def plot_chart_region_manifold(
-    ax,
-    surface_manifold,
-    chart,
-    color,
-    n_points=2000,
-    linestyle='dashed',
-    linewidth=1.0,
-    fill_surface=True,
-    alpha=0.15,
-    edgecolor='none',
-    label=None,
-    label_position="center",
-    label_fontsize=12
-):
-    """
-    Plot a chart region on the manifold with boundary and optional label.
-
-    Args:
-        ax: Matplotlib 3D axis.
-        surface_manifold: The manifold object with an .embed() method.
-        chart: The Chart object defining the region.
-        color: Color for boundary and surface.
-        n_points: Approximate number of points to sample in the interior.
-        linestyle: Boundary line style (e.g., 'dashed', 'solid').
-        linewidth: Boundary line width.
-        fill_surface: Whether to fill the region surface.
-        alpha: Transparency of the surface fill.
-        edgecolor: Edge color for triangles (None disables grid).
-        label: LaTeX string for labeling the region (e.g., r"$U$"), or None.
-        label_position: One of ["center", "top", "bottom", "left", "right"].
-        label_fontsize: Font size for the label.
-    """
-
-    # === Sample interior points ===
-    param_points = chart.sample_region_in_param_space(n_points=n_points)
-    embedded = surface_manifold.embed(param_points)
-
-    X_, Y_, Z_ = embedded[:, 0], embedded[:, 1], embedded[:, 2]
-
-    # === Plot the surface patch using triangulation ===
-    if fill_surface:
-        ax.plot_trisurf(
-            X_, Y_, Z_,
-            color=color,
-            alpha=alpha,
-            linewidth=0.01 if edgecolor != 'none' else 0,
-            edgecolor=edgecolor if edgecolor != 'none' else 'none',
-            antialiased=True
-        )
-
-    # === Plot the boundary ===
-    lambdas = jnp.linspace(0, 2 * jnp.pi, 300)
-    boundary_param = chart.boundary_in_param_space(lambdas)
-    boundary_embed = surface_manifold.embed(boundary_param)
-
-    ax.plot(
-        boundary_embed[:, 0],
-        boundary_embed[:, 1],
-        boundary_embed[:, 2],
-        color=color,
-        linestyle=linestyle,
-        linewidth=linewidth
-    )
-
-    # === Add label (optional) ===
-    if label is not None:
-        bx, by, bz = boundary_embed[:, 0], boundary_embed[:, 1], boundary_embed[:, 2]
-
-        if label_position == "center":
-            pos = (jnp.mean(bx), jnp.mean(by), jnp.mean(bz))
-        elif label_position == "top":
-            idx = jnp.argmax(bz)
-            pos = (bx[idx], by[idx], bz[idx])
-        elif label_position == "bottom":
-            idx = jnp.argmin(bz)
-            pos = (bx[idx], by[idx], bz[idx])
-        elif label_position == "right":
-            idx = jnp.argmax(bx)
-            pos = (bx[idx], by[idx], bz[idx])
-        elif label_position == "left":
-            idx = jnp.argmin(bx)
-            pos = (bx[idx], by[idx], bz[idx])
-        else:
-            raise ValueError(f"Invalid label_position: {label_position}")
-
-        ax.text(
-            pos[0], pos[1], pos[2],
-            label,
-            fontsize=label_fontsize,
-            color=color
-        )
-
-def sample_polygon_interior(polygon, key, n_points=2000, max_attempts=10):
-    """
-    Uniformly sample points inside a shapely Polygon using JAX.
-
-    Args:
-        polygon: Shapely Polygon in param space.
-        key: JAX PRNG key.
-        n_points: Number of points to sample.
-
-    Returns:
-        Array of shape (N, 2) of valid samples inside the polygon.
-    """
-
-    minx, miny, maxx, maxy = polygon.bounds
-    samples = []
-    total_collected = 0
-    attempts = 0
-
-    while total_collected < n_points and attempts < max_attempts:
-        attempts += 1
-        key, key_x, key_y = jax.random.split(key, 3)
-
-        x = jax.random.uniform(key_x, shape=(n_points,), minval=minx, maxval=maxx)
-        y = jax.random.uniform(key_y, shape=(n_points,), minval=miny, maxval=maxy)
-
-        points = jnp.stack([x, y], axis=-1)
-        points_np = jnp.array(points).tolist()  # Convert to Python lists for shapely
-
-        mask = jnp.array([polygon.contains(Point(p)) for p in points_np])
-
-        accepted = points[mask]
-        samples.append(accepted)
-
-        total_collected += accepted.shape[0]
-
-    if len(samples) == 0:
-        raise RuntimeError("No points found inside the polygon.")
-
-    samples = jnp.concatenate(samples, axis=0)[:n_points]
-    return samples
-
-def plot_chart_intersection(
-    ax,
-    surface_manifold,
-    chart1,
-    chart2,
-    color='green',
-    n_points=2000,
-    linestyle='dashed',
-    linewidth=1.0,
-    fill_surface=True,
-    alpha=0.2,
-    edgecolor='none',
-    label=r"$U \cap V$",
-    label_position="center",
-    label_fontsize=12
-):
-    """
-    Plot the intersection region between two charts on the manifold.
-    """
-
-    intersection_poly = compute_chart_intersection_polygon(chart1, chart2)
-    param_points = sample_polygon_interior(intersection_poly, key=jax.random.PRNGKey(42), n_points=n_points)
-    embedded = surface_manifold.embed(param_points)
-
-    X_, Y_, Z_ = embedded[:, 0], embedded[:, 1], embedded[:, 2]
-
-    # --- Plot fill ---
-    if fill_surface:
-        ax.plot_trisurf(
-            X_, Y_, Z_,
-            color=color,
-            alpha=alpha,
-            linewidth=0.01 if edgecolor != 'none' else 0,
-            edgecolor=edgecolor if edgecolor != 'none' else 'none',
-            antialiased=True
-        )
-
-    # --- Plot boundary ---
-    boundary = jnp.array(intersection_poly.exterior.coords)
-    boundary_embed = surface_manifold.embed(jnp.array(boundary))
-
-    ax.plot(
-        boundary_embed[:, 0],
-        boundary_embed[:, 1],
-        boundary_embed[:, 2],
-        color=color,
-        linestyle=linestyle,
-        linewidth=linewidth
-    )
-
-    # --- Label ---
-    if label is not None:
-        bx, by, bz = boundary_embed[:, 0], boundary_embed[:, 1], boundary_embed[:, 2]
-
-        if label_position == "center":
-            pos = (jnp.mean(bx), jnp.mean(by), jnp.mean(bz))
-        elif label_position == "top":
-            idx = jnp.argmax(bz)
-            pos = (bx[idx], by[idx], bz[idx])
-        elif label_position == "bottom":
-            idx = jnp.argmin(bz)
-            pos = (bx[idx], by[idx], bz[idx])
-        elif label_position == "right":
-            idx = jnp.argmax(bx)
-            pos = (bx[idx], by[idx], bz[idx])
-        elif label_position == "left":
-            idx = jnp.argmin(bx)
-            pos = (bx[idx], by[idx], bz[idx])
-        else:
-            raise ValueError(f"Invalid label_position: {label_position}")
-
-        ax.text(
-            pos[0], pos[1], pos[2],
-            label,
-            fontsize=label_fontsize,
-            color=color
-        )
 
 def plot_curve_on_manifold(
     ax,
@@ -576,6 +193,90 @@ def plot_curve_on_manifold(
             fontsize=label_fontsize,
             color=color
         )
+
+def plot_curve_on_manifold(
+    ax,
+    curve,
+    lambda_range=(-jnp.pi, jnp.pi),
+    n_points=300,
+    color="black",
+    linewidth=2.0,
+    label=None,
+    label_position="center",  # "center", "start", "end"
+    label_fontsize=14,
+    label_offset=(0, 0, 0.2)
+):
+    """
+    Plot a parametrized curve on the manifold, optionally with a label.
+    """
+    lambda_vals = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+    points = curve.evaluate_on_manifold(lambda_vals)
+
+    ax.plot(
+        points[:, 0],
+        points[:, 1],
+        points[:, 2],
+        color=color,
+        linewidth=linewidth
+    )
+
+    if label is not None:
+        idx = (
+            len(points) // 2 if label_position == "center"
+            else 0 if label_position == "start"
+            else -1
+        )
+        p_label = points[idx]
+        dx, dy, dz = label_offset
+        ax.text(
+            p_label[0] + dx,
+            p_label[1] + dy,
+            p_label[2] + dz,
+            label,
+            fontsize=label_fontsize,
+            color=color
+        )
+
+def plot_tangent_vectors_on_manifold(
+    ax,
+    curve,
+    lambda_range=(-jnp.pi, jnp.pi),
+    n_points=300,
+    step=20,
+    scale=0.4,
+    method="finite_difference",
+    style=None
+):
+    """
+    Plot tangent vectors of a curve on the manifold as arrows.
+    """
+    lambda_vals = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+    points = curve.evaluate_on_manifold(lambda_vals)
+    tangents = curve.tangent_vector_on_manifold(lambda_vals, method=method)
+
+    norms = jnp.linalg.norm(tangents, axis=1, keepdims=True)
+    unit_tangents = tangents / norms
+
+    sampled_points = points[::step]
+    sampled_tangents = unit_tangents[::step]
+
+    default_style = dict(
+        mutation_scale=1.0,
+        arrowstyle="->,head_length=4.,head_width=2.",
+        color="black",
+        lw=1.5,
+        alpha=0.7
+    )
+    if style is not None:
+        default_style.update(style)
+
+    for p, v in zip(sampled_points, sampled_tangents):
+        ax.add_artist(Arrow3D(
+            [float(p[0]), float(p[0] + v[0] * scale)],
+            [float(p[1]), float(p[1] + v[1] * scale)],
+            [float(p[2]), float(p[2] + v[2] * scale)],
+            **default_style
+        ))
 
 def plot_colored_curve_directional_derivative(
     ax,
@@ -714,111 +415,6 @@ def compute_label_position(coords, position="center", offset=(0.2, 0.2)):
     point = coords[idx]
     return point + jnp.array(offset)
 
-def plot_tangent_plane(ax, p_xyz, tangent_vec1, tangent_vec2,
-                        size=1.0, color="lightgray", alpha=0.5):
-    """
-    Plot the tangent plane at point p_xyz.
-
-    Args:
-        ax: Matplotlib 3D axis.
-        p_xyz: Point on manifold (3,).
-        tangent_vec1: First tangent vector (3,).
-        tangent_vec2: Second tangent vector (3,).
-        size: Size scaling for the plane.
-        color: Color of the plane.
-        alpha: Transparency.
-    """
-    # Create grid in tangent plane coordinates
-    s = np.linspace(-size, size, 10)
-    t = np.linspace(-size, size, 10)
-    S, T = np.meshgrid(s, t)
-
-    # Parametric equation of plane
-    plane = (
-        p_xyz.reshape(3, 1, 1)
-        + S * tangent_vec1.reshape(3, 1, 1)
-        + T * tangent_vec2.reshape(3, 1, 1)
-    )
-
-    X, Y, Z = plane[0], plane[1], plane[2]
-
-    ax.plot_surface(X, Y, Z, color=color, alpha=alpha, edgecolor="none")
-
-def plot_dual_plane_pair(
-    ax,
-    p_xyz,
-    t1,
-    t2,
-    z_shift=1.0,
-    scale=1.0,
-    plane_color="darkorange",
-    plane_alpha=0.35,
-    label=r"$T_p^*\mathcal{M}$",
-    label_offset=(0.4, 0.4, 0.15),
-    label_fontsize=16,
-    arrow_color="black",
-    arrow_alpha=0.8,
-    arrow_lw=1.0,
-    arrow_mutation_scale=20
-):
-    """
-    Plot a cotangent plane shifted from a tangent plane, with connecting arrows.
-
-    Args:
-        ax: Matplotlib 3D axis.
-        p_xyz: Center point of the tangent plane (array-like, shape (3,)).
-        t1, t2: Basis vectors of the tangent plane (array-like, shape (3,)).
-        z_shift: Vertical shift along z to place the cotangent plane.
-        scale: Size of the planes.
-        plane_color: Color of the cotangent plane.
-        plane_alpha: Transparency of the plane.
-        label: Text label for the cotangent plane.
-        label_offset: Offset for label positioning (dx, dy, dz).
-        label_fontsize: Font size for label.
-        arrow_color: Color of connecting arrows.
-        arrow_alpha: Transparency of arrows.
-        arrow_lw: Line width of arrows.
-        arrow_mutation_scale: Arrow head scale.
-    """
-    # === Compute cotangent plane center ===
-    p_cotangent = p_xyz + jnp.array([0.0, 0.0, z_shift])
-
-    # === Plot cotangent plane ===
-    plot_tangent_plane(ax, p_cotangent, t1, t2, size=scale, color=plane_color, alpha=plane_alpha)
-
-    # === Add label ===
-    ax.text(
-        p_cotangent[0] + label_offset[0],
-        p_cotangent[1] + label_offset[1],
-        p_cotangent[2] + label_offset[2],
-        label,
-        fontsize=label_fontsize,
-        color=plane_color
-    )
-
-    # === Compute corners of both planes ===
-    corner_offsets = [
-        -t1 * scale / 2 - t2 * scale / 2,
-        -t1 * scale / 2 + t2 * scale / 2,
-        +t1 * scale / 2 - t2 * scale / 2,
-        +t1 * scale / 2 + t2 * scale / 2,
-    ]
-    corners_TpM = [p_xyz + offset for offset in corner_offsets]
-    corners_TpM_star = [p_cotangent + offset for offset in corner_offsets]
-
-    # === Plot connecting arrows ===
-    for pt_from, pt_to in zip(corners_TpM, corners_TpM_star):
-        ax.add_artist(Arrow3D(
-            [pt_from[0], pt_to[0]],
-            [pt_from[1], pt_to[1]],
-            [pt_from[2], pt_to[2]],
-            mutation_scale=arrow_mutation_scale,
-            arrowstyle="->",
-            lw=arrow_lw,
-            color=arrow_color,
-            alpha=arrow_alpha
-        ))
-
 def compute_chart_intersection_polygon(chart1, chart2):
     """
     Compute the intersection polygon (in parameter space) between two charts.
@@ -859,60 +455,6 @@ def compute_chart_intersection_polygon(chart1, chart2):
         )
 
     return intersection
-
-def plot_chart_region_2D(
-    ax, boundary,
-    color="red", linestyle="dashed",
-    linewidth=1.5, alpha=0.05,
-    label=None, label_position="center", label_offset=(0.2, 0.2),
-    label_fontsize=16
-):
-
-    ax.fill(boundary[:, 0], boundary[:, 1],
-            color=color, alpha=alpha, zorder=1)
-    ax.plot(boundary[:, 0], boundary[:, 1],
-            color=color, linestyle=linestyle, linewidth=linewidth, zorder=2)
-
-    if label is not None:
-        label_pos = compute_label_position(
-            boundary, position=label_position, offset=label_offset
-        )
-        ax.text(
-            label_pos[0], label_pos[1], label,
-            color=color, fontsize=label_fontsize,
-            ha="center", va="center"
-        )
-
-def plot_intersection_region_2D(
-    ax, intersection_coords_list,
-    color="green", linestyle="dotted",
-    linewidth=3.0, alpha=0.3,
-    label=None, label_position="center", label_offset=(0.2, 0.2),
-    label_fontsize=16
-):
-    """
-    Plot the intersection region(s) given a list of boundary coordinate arrays.
-
-    Args:
-        intersection_coords_list: list of (N_i, 2) arrays.
-    """
-    for coords in intersection_coords_list:
-        ax.fill(coords[:, 0], coords[:, 1],
-                color=color, alpha=alpha, zorder=2)
-        ax.plot(coords[:, 0], coords[:, 1],
-                color=color, linestyle=linestyle, linewidth=linewidth, zorder=3)
-
-    if label is not None:
-        # Place label on the largest polygon
-        largest = max(intersection_coords_list, key=lambda c: len(c))
-        label_pos = compute_label_position(
-            largest, position=label_position, offset=label_offset
-        )
-        ax.text(
-            label_pos[0], label_pos[1], label,
-            color=color, fontsize=label_fontsize,
-            ha="center", va="center"
-        )
 
 def plot_curve_in_chart(
     ax, chart, curve,
@@ -995,7 +537,7 @@ def plot_colored_curve_directional_derivative_in_chart(
     segments = [[points_chart[i], points_chart[i + 1]] for i in range(len(points_chart) - 1)]
 
     line_collection = LineCollection(
-        segments, colors=colors[:-1], linewidths=linewidth, alpha=0.95, zorder=4
+        segments, colors=colors[:-1], linewidths=linewidth, alpha=0.7, zorder=4
     )
     ax.add_collection(line_collection)
 
@@ -1064,62 +606,37 @@ def plot_colored_curve_directional_derivative_in_chart(
 
     return line_collection
 
-def plot_tangent_vectors_in_chart(
+def plot_chart_components_of_curve_tangent(
     ax, chart, curve,
     lambda_range=(-jnp.pi, jnp.pi), n_points=300,
     step=30, scale=0.9,
     color="black", linewidth=1.2,
     head_width=0.15, head_length=0.2,
     zorder=4, length_includes_head=True,
-    tangent_method="finite_difference",
+    method="autodiff",
 ):
     """
-    Plot tangent vectors of a curve in chart coordinates (correctly transformed).
+    Plot chart components of the tangent vector to a curve: d/dλ (X^i ∘ γ)(λ)
 
     Args:
-        ax: Matplotlib axis.
-        chart: Chart object.
-        curve: Curve object.
-        lambda_range: Range of lambda parameter for curve.
-        n_points: Number of points to sample along the curve.
-        step: Interval for sampling tangent vectors (density).
-        scale: Scaling factor for arrow length.
-        color: Color of arrows.
-        linewidth: Arrow line width.
-        head_width: Width of arrowhead.
-        head_length: Length of arrowhead.
-        zorder: Plot order.
-        length_includes_head: Whether arrow length includes head.
-        tangent_method: "finite_difference" (default) or "autodiff".
+        Same as original.
     """
-    # === Sample lambdas ===
     lambdas = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
     sampled_lambdas = lambdas[::step]
 
-    # === Evaluate curve points in chart ===
-    points_in_chart = chart.map_to_chart(curve.evaluate_in_param_space(sampled_lambdas))
+    # Points in chart coordinates
+    points_in_chart = curve.evaluate_in_chart(chart, sampled_lambdas)
 
-    # === Tangents in parameter space ===
-    tangents_in_param = curve.tangent_vector_in_param_space(
-        sampled_lambdas, method=tangent_method
+    # Derivatives of chart components
+    chart_components = curve.tangent_vector_components_in_chart(
+        chart, sampled_lambdas, method=method
     )
 
-    # === Compute Jacobian of chart map at each curve point ===
-    def chart_map_fn(param_point):
-        return chart.map_to_chart(param_point)
+    # Normalize for plotting
+    norms = jnp.linalg.norm(chart_components, axis=1, keepdims=True)
+    unit_tangents = chart_components / norms
 
-    jacobian_fn = jax.jacrev(chart_map_fn)
-    jacobians = jax.vmap(jacobian_fn)(curve.evaluate_in_param_space(sampled_lambdas))
-    # Shape (N, chart_dim, param_dim)
-
-    # === Pushforward tangent: v_chart = Jacobian @ v_param
-    tangents_in_chart = jnp.einsum('nij,nj->ni', jacobians, tangents_in_param)
-
-    # === Normalize tangents for plotting
-    norms = jnp.linalg.norm(tangents_in_chart, axis=1, keepdims=True)
-    unit_tangents = tangents_in_chart / norms
-
-    # === Plot arrows
+    # Plot arrows
     for p, v in zip(points_in_chart, unit_tangents):
         ax.arrow(
             p[0], p[1],

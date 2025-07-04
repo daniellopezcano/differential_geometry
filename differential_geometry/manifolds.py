@@ -14,11 +14,25 @@ class Manifold:
         Manifold embedded in R^n.
 
         Args:
-            param_dim: Dimension of the parameter space (1D curve or 2D surface).
-            ambient_dim: Dimension of the ambient space (2D or 3D).
+            param_dim: Dimension of the parameter space (e.g., 1D curve, 2D surface).
+            ambient_dim: Dimension of the ambient space (e.g., 2D or 3D).
             embedding_func: Function f: R^{param_dim} -> R^{ambient_dim}
                 that defines the manifold embedding.
         """
+        valid_combinations = {
+            (1, 1),
+            (1, 2),
+            (1, 3),
+            (2, 2),
+            (2, 3),
+            (3, 3),
+        }
+        if (param_dim, ambient_dim) not in valid_combinations:
+            raise ValueError(
+                f"Invalid (param_dim, ambient_dim) = ({param_dim}, {ambient_dim}). "
+                "Allowed combinations: " + ", ".join(map(str, valid_combinations))
+            )
+
         self.param_dim = param_dim
         self.ambient_dim = ambient_dim
         self.embedding_func = embedding_func
@@ -33,28 +47,47 @@ class Manifold:
         Returns:
             Array of shape (..., ambient_dim) — embedded points.
         """
-        params = jnp.atleast_2d(params)
-        return jax.vmap(self.embedding_func)(params)
+        params = jnp.asarray(params)
+        if params.shape[-1] != self.param_dim:
+            raise ValueError(
+                f"Expected params.shape[-1] == {self.param_dim}, but got {params.shape[-1]}"
+            )
 
-    def tangent_plane_at(self, p_param: jnp.ndarray):
+        # Ensure input is at least 2D for consistent vectorization
+        params_2d = params.reshape(-1, self.param_dim)
+        embedded = jax.vmap(self.embedding_func)(params_2d)
+
+        if embedded.shape[-1] != self.ambient_dim:
+            raise ValueError(
+                f"Embedding function output has last dim {embedded.shape[-1]}, "
+                f"but expected ambient_dim = {self.ambient_dim}."
+            )
+
+        return embedded.reshape(params.shape[:-1] + (self.ambient_dim,))
+
+    def derivatives_at_params(self, params: jnp.ndarray) -> jnp.ndarray:
         """
-        Compute the tangent plane basis vectors at a point p on the manifold.
+        Compute the Jacobian matrix ∂Φ/∂param_dim for a batch of parameter points.
 
         Args:
-            p_param: Point in parameter space (shape (2,)).
+            params: Array of shape (..., param_dim).
 
         Returns:
-            p_xyz: Embedded point on the manifold (shape (3,)).
-            tangent_vec1: First tangent vector in R^3 (∂Φ/∂x).
-            tangent_vec2: Second tangent vector in R^3 (∂Φ/∂y).
+            Array of shape (..., param_dim, ambient_dim) containing all directional derivatives
+            at each point in parameter space.
         """
-        jacobian = jax.jacrev(self.embedding_func)(p_param)  # Shape (ambient_dim, param_dim)
+        params = jnp.asarray(params)
+        if params.shape[-1] != self.param_dim:
+            raise ValueError(
+                f"Expected params.shape[-1] == {self.param_dim}, but got {params.shape[-1]}"
+            )
 
-        tangent_vec1 = jacobian[:, 0]  # ∂Φ/∂x
-        tangent_vec2 = jacobian[:, 1]  # ∂Φ/∂y
+        params_2d = params.reshape(-1, self.param_dim)
 
-        p_xyz = self.embed(p_param)
-        if p_xyz.shape[0] == 1:
-            p_xyz = p_xyz[0]
+        # Compute jacobian of shape (N, ambient_dim, param_dim)
+        jacobian = jax.vmap(jax.jacrev(self.embedding_func))(params_2d)
 
-        return p_xyz, tangent_vec1, tangent_vec2
+        # Transpose to (N, param_dim, ambient_dim)
+        jacobian = jnp.transpose(jacobian, axes=(0, 2, 1))
+
+        return jacobian.reshape(params.shape[:-1] + (self.param_dim, self.ambient_dim))

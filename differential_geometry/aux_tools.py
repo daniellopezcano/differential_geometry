@@ -158,6 +158,7 @@ def vertical_line_curve_factory(p_x, p_y):
         return jnp.stack([x, y], axis=-1)
     return curve
 
+
 def circle_curve_factory(p_x, p_y):
     """
     Returns a function representing a circle centered at (0, 0) 

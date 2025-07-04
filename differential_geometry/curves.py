@@ -57,41 +57,6 @@ class Curve:
         return embedded if embedded.ndim == 2 else embedded[0]
 
     # ======================================================
-    # === Tangent Vector in Parameter Space
-    # ======================================================
-
-    def tangent_vector_in_param_space(self, lambdas, method="autodiff", delta=1e-5):
-        """
-        Compute the tangent vector in parameter space.
-
-        Args:
-            lambdas: Array of λ values (shape (N,)) or scalar.
-            method: 'autodiff' (default) or 'finite_difference'.
-            delta: Step size for finite differences.
-
-        Returns:
-            Array of shape (N, param_dim) or (param_dim,) if single λ.
-        """
-        lambdas = jnp.atleast_1d(lambdas)
-
-        if method == "finite_difference":
-            plus = self.evaluate_in_param_space(lambdas + delta)
-            minus = self.evaluate_in_param_space(lambdas - delta)
-            tangent = (plus - minus) / (2 * delta)
-
-        elif method == "autodiff":
-            def gamma_fn(lmb):
-                return self.parametric_function(jnp.atleast_1d(lmb))
-
-            jac_fn = jax.vmap(jax.jacrev(gamma_fn))
-            tangent = jac_fn(lambdas).squeeze(-1)  # Remove trailing dim
-
-        else:
-            raise ValueError(f"Unknown method: {method}")
-
-        return tangent if lambdas.shape[0] > 1 else tangent[0]
-
-    # ======================================================
     # === Tangent Vector on the Manifold
     # ======================================================
 
@@ -126,3 +91,42 @@ class Curve:
             raise ValueError(f"Unknown method: {method}")
 
         return tangent if lambdas.shape[0] > 1 else tangent[0]
+
+    # ======================================================
+    # === Curve Evaluation in Chart Coordinates
+    # ======================================================
+    def evaluate_in_chart(self, chart, lambdas):
+        """
+        Evaluate the curve in chart coordinates: X(gamma(lambda)).
+
+        Args:
+            chart: Chart object.
+            lambdas: array-like
+
+        Returns:
+            Array of shape (N, chart_dim)
+        """
+        param_points = self.evaluate_in_param_space(lambdas)
+        return chart.map_to_chart(param_points)
+    
+    # ======================================================
+    # === Tangent Vector Components in Chart Coordinates
+    # ======================================================
+    def tangent_vector_components_in_chart(self, chart, lambdas, method="autodiff", delta=1e-5):
+        lambdas = jnp.atleast_1d(lambdas)
+
+        if method == "finite_difference":
+            plus = self.evaluate_in_chart(chart, lambdas + delta)
+            minus = self.evaluate_in_chart(chart, lambdas - delta)
+            tangents = (plus - minus) / (2 * delta)
+
+        elif method == "autodiff":
+            def composed_fn(lmb):
+                return chart.map_to_chart(self.parametric_function(jnp.atleast_1d(lmb)))
+            jac_fn = jax.vmap(jax.jacrev(composed_fn))
+            tangents = jnp.squeeze(jac_fn(lambdas), axis=1)
+
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        return tangents if lambdas.shape[0] > 1 else tangents[0]

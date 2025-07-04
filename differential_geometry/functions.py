@@ -91,4 +91,60 @@ class Function:
         else:
             raise ValueError(f"Unknown method: {method}")
 
+    def partial_derivatives_in_chart(
+        self,
+        chart,
+        chart_points: jnp.ndarray,
+        method="autodiff",
+        delta=1e-5
+    ) -> jnp.ndarray:
+        """
+        Compute ∂(f ◦ X^{-1})/∂x^i at given chart points.
 
+        Args:
+            chart: A Chart object defined on the same manifold.
+            chart_points: Array of shape (N, chart_dim) with points in R^d (chart coordinates).
+            method: "autodiff" or "finite_difference"
+            delta: Step size for finite differences.
+
+        Returns:
+            Array of shape (N, chart_dim) with ∂f/∂x^i at each point.
+        """
+        assert chart.manifold == self.manifold, "Chart must belong to the same manifold as the function."
+
+        chart_points = jnp.atleast_2d(chart_points)
+        chart_dim = chart_points.shape[1]
+
+        def pulled_back_function(x_chart):
+            # x_chart ∈ ℝ^d → pull back to param space via X^{-1}
+            x_chart = jnp.atleast_1d(x_chart)
+            # Use numerical inverse via optimization or stored inverse if defined
+            # Here we assume we can call chart.inverse_map(x_chart)
+            # For simplicity we use a numerical Newton or fallback if not defined
+            raise NotImplementedError("Need to implement or define chart.inverse_map.")
+
+        # === Finite difference version ===
+        if method == "finite_difference":
+            def finite_diff_partial(x, i):
+                dx = jnp.zeros_like(x).at[i].set(delta)
+                f_plus = self.evaluate_in_param_space(chart.inverse_map(x + dx))
+                f_minus = self.evaluate_in_param_space(chart.inverse_map(x - dx))
+                return (f_plus - f_minus) / (2 * delta)
+
+            grads = jnp.stack([
+                jax.vmap(lambda x: jnp.array([finite_diff_partial(x, i) for i in range(chart_dim)]))(chart_points)
+            ], axis=0)[0]
+
+        # === Autodiff version ===
+        elif method == "autodiff":
+            def composed_f(x):
+                param = chart.inverse_map(x)
+                return self.evaluate_in_param_space(param).reshape(())
+
+            jac_fn = jax.vmap(jax.grad(composed_f))
+            grads = jac_fn(chart_points)
+
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        return grads  # shape (N, chart_dim)
