@@ -417,3 +417,57 @@ def boundary_ellipse_in_param_space(lambdas, center=(1.0, 0.0), axes=(1.5, 1.0))
     x = a * jnp.cos(lambdas) + x_center
     y = b * jnp.sin(lambdas) + y_center
     return jnp.stack([x, y], axis=-1)
+
+
+def boundary_rectangle_in_param_space(
+    lambdas: jnp.ndarray,
+    xlim: tuple = (0.0, 1.0),
+    ylim: tuple = (0.0, 1.0),
+) -> jnp.ndarray:
+    """
+    Parametric boundary of a rectangle in parameter space (closed curve).
+
+    This uses the input lambdas ∈ [0, 4), mapped to the rectangle's perimeter.
+
+    Args:
+        lambdas: 1D array of parameter values in [0, 4).
+        xlim: Tuple (x_min, x_max), x-range of the rectangle.
+        ylim: Tuple (y_min, y_max), y-range of the rectangle.
+
+    Returns:
+        Array of shape (N+1, 2) with (x, y) boundary points, closed (last point == first).
+    """
+    x_min, x_max = xlim
+    y_min, y_max = ylim
+
+    lambdas = lambdas % 4.0  # Ensure periodicity
+
+    x = jnp.zeros_like(lambdas)
+    y = jnp.zeros_like(lambdas)
+
+    # Edge 1: Bottom
+    mask1 = (lambdas >= 0) & (lambdas < 1)
+    x = x.at[mask1].set(x_min + (x_max - x_min) * (lambdas[mask1] - 0.0))
+    y = y.at[mask1].set(y_min)
+
+    # Edge 2: Right
+    mask2 = (lambdas >= 1) & (lambdas < 2)
+    x = x.at[mask2].set(x_max)
+    y = y.at[mask2].set(y_min + (y_max - y_min) * (lambdas[mask2] - 1.0))
+
+    # Edge 3: Top
+    mask3 = (lambdas >= 2) & (lambdas < 3)
+    x = x.at[mask3].set(x_max - (x_max - x_min) * (lambdas[mask3] - 2.0))
+    y = y.at[mask3].set(y_max)
+
+    # Edge 4: Left
+    mask4 = (lambdas >= 3) & (lambdas < 4)
+    x = x.at[mask4].set(x_min)
+    y = y.at[mask4].set(y_max - (y_max - y_min) * (lambdas[mask4] - 3.0))
+
+    curve = jnp.stack([x, y], axis=-1)
+
+    # Ensure the curve is closed
+    curve_closed = jnp.vstack([curve, curve[0:1]])
+
+    return curve_closed

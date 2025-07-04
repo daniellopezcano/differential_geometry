@@ -2,10 +2,12 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import jax.numpy as jnp
 import numpy as np
 
 from plotting_tools.basic_plotting_tools import Arrow3D
+
 
 def plot_manifold(
     ax,
@@ -22,30 +24,20 @@ def plot_manifold(
     function=None,
     cmap="viridis",
     label_function=None,
+    # === Inset colorbar options ===
+    inset_colorbar=True,
+    inset_position=(0.02, 0.02),
+    inset_size=(0.25, 0.02),
+    colorbar_orientation="horizontal",
+    label_colorbar_position="top",
+    inset_box_alpha=0.8,
+    inset_box_color="white",
+    inset_border_color="black",
 ):
     """
-    Clean-style manifold plotter for supported embeddings:
-      - 1→2: curve in 2D
-      - 1→3: curve in 3D
-      - 2→2: surface in 2D (via contours)
-      - 2→3: surface in 3D
-    3→3 is not implemented.
-
-    Args:
-        ax: Matplotlib axis (2D or 3D).
-        manifold: Manifold object.
-        resolution: Number of grid/line points.
-        xmin, xmax, ymin, ymax: Parameter space limits.
-        color: Surface or line color.
-        alpha: Transparency.
-        edgecolor: Grid mesh line color.
-        label: Optional text label for the manifold.
-        label_position: Label placement on plot.
-        label_fontsize: Font size for label text.
-        function: Optional scalar function on parameter space.
-        cmap: Colormap for scalar shading.
-        label_function: Label for colorbar.
+    Plot a manifold embedded in 2D or 3D, optionally colored by a scalar function.
     """
+
     param_dim = manifold.param_dim
     ambient_dim = manifold.ambient_dim
 
@@ -60,24 +52,14 @@ def plot_manifold(
         ax.set_ylabel("")
         ax.set_zlabel("")
         ax.grid(False)
-        ax.set_box_aspect([1, 1, 1])  # Force equal aspect
-
-        # Remove panes
-        ax.xaxis.pane.set_visible(False)
-        ax.yaxis.pane.set_visible(False)
-        ax.zaxis.pane.set_visible(False)
-
-        # Remove the edges of the box
-        ax.xaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
-        ax.yaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
-        ax.zaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
-
-        # New (ensure outer lines also invisible)
+        ax.set_box_aspect([1, 1, 1])
         for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
             axis.line.set_color((1.0, 1.0, 1.0, 0.0))
             axis.label.set_color((1.0, 1.0, 1.0, 0.0))
             axis.major_ticks = []
-
+        ax.xaxis.pane.set_visible(False)
+        ax.yaxis.pane.set_visible(False)
+        ax.zaxis.pane.set_visible(False)
 
     def clean_2d_axes(ax):
         ax.set_xticks([])
@@ -89,25 +71,20 @@ def plot_manifold(
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-    # === 1D domains ===
     if param_dim == 1:
         t = jnp.linspace(xmin, xmax, resolution).reshape(-1, 1)
         embedded = manifold.embed(t)
-
         if ambient_dim == 2:
             ax.plot(embedded[:, 0], embedded[:, 1], color=color, alpha=alpha)
             clean_2d_axes(ax)
-
         elif ambient_dim == 3:
             ax.plot3D(embedded[:, 0], embedded[:, 1], embedded[:, 2], color=color, alpha=alpha)
             clean_3d_axes(ax)
-
         if label:
             idx = resolution // 2
             pos = embedded[idx]
             ax.text(*pos, label, fontsize=label_fontsize, color=color)
 
-    # === 2D domains ===
     elif param_dim == 2:
         x = jnp.linspace(xmin, xmax, resolution)
         y = jnp.linspace(ymin, ymax, resolution)
@@ -123,8 +100,39 @@ def plot_manifold(
                 cmap_obj = cm.get_cmap(cmap)
                 norm = mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max()))
                 ax.contourf(X, Y, F_vals, levels=50, cmap=cmap_obj)
-                cbar = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap_obj), ax=ax)
-                cbar.set_label(label_function or "Function value", fontsize=label_fontsize)
+
+                if inset_colorbar:
+                    cbax = inset_axes(
+                        ax,
+                        width=inset_size[0],
+                        height=inset_size[1],
+                        loc='lower left',
+                        bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+                        bbox_transform=ax.transAxes,
+                        borderpad=0
+                    )
+                    mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+                    mappable.set_array(F_vals)
+                    cbar = plt.colorbar(mappable, cax=cbax, orientation=colorbar_orientation)
+                    cbar.ax.tick_params(labelsize=8)
+                    cbar.outline.set_visible(False)
+                    for spine in cbax.spines.values():
+                        spine.set_edgecolor(inset_border_color)
+                        spine.set_linewidth(1.0)
+                    cbax.set_facecolor(inset_box_color)
+                    cbax.patch.set_alpha(inset_box_alpha)
+                    if label_function:
+                        if colorbar_orientation == "horizontal":
+                            if label_colorbar_position == "top":
+                                cbax.set_title(label_function, fontsize=10, pad=4)
+                            elif label_colorbar_position == "bottom":
+                                cbax.set_xlabel(label_function, fontsize=10, labelpad=4)
+                        else:
+                            if label_colorbar_position == "right":
+                                cbax.set_ylabel(label_function, fontsize=10, rotation=-90, labelpad=10)
+                            elif label_colorbar_position == "left":
+                                cbax.yaxis.set_label_position("left")
+                                cbax.set_ylabel(label_function, fontsize=10, rotation=90, labelpad=10)
             else:
                 ax.contour(X, Y, levels=10, colors=color, linewidths=1)
             clean_2d_axes(ax)
@@ -133,7 +141,6 @@ def plot_manifold(
             X = embedded[:, 0].reshape(XX.shape)
             Y = embedded[:, 1].reshape(XX.shape)
             Z = embedded[:, 2].reshape(XX.shape)
-
             if function is not None:
                 F_vals = function.evaluate_in_param_space(param_points).reshape(XX.shape)
                 norm = mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max()))
@@ -150,10 +157,38 @@ def plot_manifold(
                     alpha=alpha
                 )
 
-                mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
-                mappable.set_array(F_vals)
-                cbar = plt.colorbar(mappable, ax=ax, shrink=0.6, pad=0.05)
-                cbar.set_label(label_function or "Function value", fontsize=label_fontsize)
+                if inset_colorbar:
+                    cbax = inset_axes(
+                        ax,
+                        width=inset_size[0],
+                        height=inset_size[1],
+                        loc='lower left',
+                        bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+                        bbox_transform=ax.transAxes,
+                        borderpad=0
+                    )
+                    mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+                    mappable.set_array(F_vals)
+                    cbar = plt.colorbar(mappable, cax=cbax, orientation=colorbar_orientation)
+                    cbar.ax.tick_params(labelsize=8)
+                    cbar.outline.set_visible(False)
+                    for spine in cbax.spines.values():
+                        spine.set_edgecolor(inset_border_color)
+                        spine.set_linewidth(1.0)
+                    cbax.set_facecolor(inset_box_color)
+                    cbax.patch.set_alpha(inset_box_alpha)
+                    if label_function:
+                        if colorbar_orientation == "horizontal":
+                            if label_colorbar_position == "top":
+                                cbax.set_title(label_function, fontsize=10, pad=4)
+                            elif label_colorbar_position == "bottom":
+                                cbax.set_xlabel(label_function, fontsize=10, labelpad=4)
+                        else:
+                            if label_colorbar_position == "right":
+                                cbax.set_ylabel(label_function, fontsize=10, rotation=-90, labelpad=10)
+                            elif label_colorbar_position == "left":
+                                cbax.yaxis.set_label_position("left")
+                                cbax.set_ylabel(label_function, fontsize=10, rotation=90, labelpad=10)
 
             else:
                 surface = ax.plot_surface(
@@ -164,7 +199,6 @@ def plot_manifold(
                     antialiased=True,
                     linewidth=0.2 if edgecolor != "none" else 0
                 )
-
             clean_3d_axes(ax)
 
             if label is not None:
@@ -185,11 +219,14 @@ def plot_manifold(
                     pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
                 else:
                     raise ValueError(f"Invalid label_position: {label_position}")
-
                 ax.text(*pos, label, fontsize=label_fontsize, color="black" if function else color)
 
     else:
         raise NotImplementedError(f"Plotting for (param_dim={param_dim}, ambient_dim={ambient_dim}) is not implemented.")
+
+
+
+
 
 def plot_tangent_vectors(
     ax,

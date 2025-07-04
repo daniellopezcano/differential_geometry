@@ -19,10 +19,6 @@ class Curve:
         self.manifold = manifold
         self.parametric_function = parametric_function
 
-    # ======================================================
-    # === Curve Evaluation
-    # ======================================================
-
     def evaluate_in_param_space(self, lambdas):
         """
         Evaluate the curve in parameter space.
@@ -56,10 +52,6 @@ class Curve:
 
         return embedded if embedded.ndim == 2 else embedded[0]
 
-    # ======================================================
-    # === Tangent Vector on the Manifold
-    # ======================================================
-
     def tangent_vector_on_manifold(self, lambdas, method="autodiff", delta=1e-5):
         """
         Compute the tangent vector embedded in the manifold (ambient space).
@@ -92,9 +84,6 @@ class Curve:
 
         return tangent if lambdas.shape[0] > 1 else tangent[0]
 
-    # ======================================================
-    # === Curve Evaluation in Chart Coordinates
-    # ======================================================
     def evaluate_in_chart(self, chart, lambdas):
         """
         Evaluate the curve in chart coordinates: X(gamma(lambda)).
@@ -109,9 +98,7 @@ class Curve:
         param_points = self.evaluate_in_param_space(lambdas)
         return chart.map_to_chart(param_points)
     
-    # ======================================================
-    # === Tangent Vector Components in Chart Coordinates
-    # ======================================================
+    
     def tangent_vector_components_in_chart(self, chart, lambdas, method="autodiff", delta=1e-5):
         lambdas = jnp.atleast_1d(lambdas)
 

@@ -1,9 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from typing import Callable, Optional, Union, Tuple
-import matplotlib.tri as mtri
-from collections import defaultdict
+from scipy.spatial import Delaunay
 
 def plot_chart_region_manifold(
     ax,

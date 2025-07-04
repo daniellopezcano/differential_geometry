@@ -43,7 +43,6 @@ class Arrow3D(FancyArrowPatch):
         self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
         return np.mean(zs)  # Use numpy mean, not jnp
 
-
 def plot_tangent_planes(
     ax,
     embedded_points,
@@ -90,193 +89,6 @@ def plot_tangent_planes(
 
 
 
-
-
-
-
-def plot_curve_on_manifold(
-    ax,
-    curve,
-    lambda_range=(-jnp.pi, jnp.pi),
-    n_points=300,
-    color="black",
-    linewidth=2.0,
-    show_tangents=True,
-    tangent_step=20,
-    tangent_scale=0.4,
-    tangent_style=None,
-    tangent_method="finite_difference",  # or "autodiff"
-    label=None,
-    label_position="center",  # "center", "start", "end"
-    label_fontsize=14,
-    label_offset=(0, 0, 0.2)
-):
-    """
-    Plot a parametrized curve on the manifold with optional tangent arrows and label.
-
-    Args:
-        ax: Matplotlib 3D axis.
-        curve: A Curve object.
-        lambda_range: Tuple (lambda_min, lambda_max) for curve parameter range.
-        n_points: Number of sampling points along the curve.
-        color: Color of the curve and tangents.
-        linewidth: Width of the curve line.
-        show_tangents: Whether to plot tangent arrows.
-        tangent_step: Plot an arrow every 'tangent_step' points.
-        tangent_scale: Scale factor for arrow length.
-        tangent_style: Dict of arrow style kwargs (merged with defaults).
-        tangent_method: "finite_difference" (default) or "autodiff".
-        label: LaTeX string label for the curve (e.g. r"$\gamma$") or None.
-        label_position: "center", "start", or "end".
-        label_fontsize: Font size of the label.
-        label_offset: Tuple (dx, dy, dz) offset for label position.
-    """
-    # === Sample curve ===
-    lambda_vals = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
-    points = curve.evaluate_on_manifold(lambda_vals)
-
-    # === Plot the curve ===
-    ax.plot(
-        points[:, 0],
-        points[:, 1],
-        points[:, 2],
-        color=color,
-        linewidth=linewidth
-    )
-
-    # === Plot tangent arrows ===
-    if show_tangents:
-        tangents = curve.tangent_vector_on_manifold(lambda_vals, method=tangent_method)
-        norms = jnp.linalg.norm(tangents, axis=1, keepdims=True)
-        unit_tangents = tangents / norms
-
-        sampled_points = points[::tangent_step]
-        sampled_tangents = unit_tangents[::tangent_step]
-
-        arrow_style = dict(
-            mutation_scale=1.0,
-            arrowstyle="->,head_length=4.,head_width=2.",
-            color=color,
-            lw=1.5,
-            alpha=0.7
-        )
-        if tangent_style is not None:
-            arrow_style.update(tangent_style)
-
-        for p, v in zip(sampled_points, sampled_tangents):
-            ax.add_artist(Arrow3D(
-                [float(p[0]), float(p[0] + v[0] * tangent_scale)],
-                [float(p[1]), float(p[1] + v[1] * tangent_scale)],
-                [float(p[2]), float(p[2] + v[2] * tangent_scale)],
-                **arrow_style
-            ))
-
-    # === Add label ===
-    if label is not None:
-        if label_position == "center":
-            idx = len(points) // 2
-        elif label_position == "start":
-            idx = 0
-        elif label_position == "end":
-            idx = -1
-        else:
-            raise ValueError(f"Invalid label_position: {label_position}")
-
-        p_label = points[idx]
-        dx, dy, dz = label_offset
-
-        ax.text(
-            p_label[0] + dx,
-            p_label[1] + dy,
-            p_label[2] + dz,
-            label,
-            fontsize=label_fontsize,
-            color=color
-        )
-
-def plot_curve_on_manifold(
-    ax,
-    curve,
-    lambda_range=(-jnp.pi, jnp.pi),
-    n_points=300,
-    color="black",
-    linewidth=2.0,
-    label=None,
-    label_position="center",  # "center", "start", "end"
-    label_fontsize=14,
-    label_offset=(0, 0, 0.2)
-):
-    """
-    Plot a parametrized curve on the manifold, optionally with a label.
-    """
-    lambda_vals = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
-    points = curve.evaluate_on_manifold(lambda_vals)
-
-    ax.plot(
-        points[:, 0],
-        points[:, 1],
-        points[:, 2],
-        color=color,
-        linewidth=linewidth
-    )
-
-    if label is not None:
-        idx = (
-            len(points) // 2 if label_position == "center"
-            else 0 if label_position == "start"
-            else -1
-        )
-        p_label = points[idx]
-        dx, dy, dz = label_offset
-        ax.text(
-            p_label[0] + dx,
-            p_label[1] + dy,
-            p_label[2] + dz,
-            label,
-            fontsize=label_fontsize,
-            color=color
-        )
-
-def plot_tangent_vectors_on_manifold(
-    ax,
-    curve,
-    lambda_range=(-jnp.pi, jnp.pi),
-    n_points=300,
-    step=20,
-    scale=0.4,
-    method="finite_difference",
-    style=None
-):
-    """
-    Plot tangent vectors of a curve on the manifold as arrows.
-    """
-    lambda_vals = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
-    points = curve.evaluate_on_manifold(lambda_vals)
-    tangents = curve.tangent_vector_on_manifold(lambda_vals, method=method)
-
-    norms = jnp.linalg.norm(tangents, axis=1, keepdims=True)
-    unit_tangents = tangents / norms
-
-    sampled_points = points[::step]
-    sampled_tangents = unit_tangents[::step]
-
-    default_style = dict(
-        mutation_scale=1.0,
-        arrowstyle="->,head_length=4.,head_width=2.",
-        color="black",
-        lw=1.5,
-        alpha=0.7
-    )
-    if style is not None:
-        default_style.update(style)
-
-    for p, v in zip(sampled_points, sampled_tangents):
-        ax.add_artist(Arrow3D(
-            [float(p[0]), float(p[0] + v[0] * scale)],
-            [float(p[1]), float(p[1] + v[1] * scale)],
-            [float(p[2]), float(p[2] + v[2] * scale)],
-            **default_style
-        ))
 
 def plot_colored_curve_directional_derivative(
     ax,
@@ -396,97 +208,6 @@ def plot_colored_curve_directional_derivative(
 
     return line_collection
 
-def compute_label_position(coords, position="center", offset=(0.2, 0.2)):
-    center = jnp.mean(coords, axis=0)
-
-    if position == "center":
-        return center
-    elif position == "top":
-        idx = np.argmax(coords[:, 1])
-    elif position == "bottom":
-        idx = np.argmin(coords[:, 1])
-    elif position == "left":
-        idx = np.argmin(coords[:, 0])
-    elif position == "right":
-        idx = np.argmax(coords[:, 0])
-    else:
-        raise ValueError(f"Unknown label position: {position}")
-
-    point = coords[idx]
-    return point + jnp.array(offset)
-
-def compute_chart_intersection_polygon(chart1, chart2):
-    """
-    Compute the intersection polygon (in parameter space) between two charts.
-
-    Returns:
-        A shapely Polygon representing the intersection region.
-    """
-
-    # === Sample boundaries ===
-    lambda_vals = jnp.linspace(0, 2 * jnp.pi, 500)
-
-    boundary1 = jnp.array(chart1.boundary_in_param_space(lambda_vals))
-    boundary2 = jnp.array(chart2.boundary_in_param_space(lambda_vals))
-
-    # === Ensure boundaries are closed ===
-    if not jnp.allclose(boundary1[0], boundary1[-1]):
-        boundary1 = jnp.vstack([boundary1, boundary1[0]])
-
-    if not jnp.allclose(boundary2[0], boundary2[-1]):
-        boundary2 = jnp.vstack([boundary2, boundary2[0]])
-
-    poly1 = Polygon(boundary1).buffer(0)  # buffer(0) cleans invalidities
-    poly2 = Polygon(boundary2).buffer(0)
-
-    if not poly1.is_valid or not poly2.is_valid:
-        raise ValueError("One or both input polygons are invalid even after cleaning.")
-
-    # === Compute intersection ===
-    intersection = poly1.intersection(poly2)
-
-    if intersection.is_empty:
-        raise ValueError("The two charts do not overlap.")
-
-    if not isinstance(intersection, Polygon):
-        raise ValueError(
-            "Intersection resulted in multiple disjoint regions or a degenerate shape. "
-            "Check if the input regions are correct and simply connected."
-        )
-
-    return intersection
-
-def plot_curve_in_chart(
-    ax, chart, curve,
-    lambda_range=(-jnp.pi, jnp.pi), n_points=300,
-    color="black", linewidth=2.0,
-    label=None, label_position="end", label_offset=(0.2, 0.2),
-    label_fontsize=16
-):
-    lambdas = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
-    points = chart.map_to_chart(curve.evaluate_in_param_space(lambdas))
-
-    ax.plot(points[:, 0], points[:, 1],
-            color=color, linewidth=linewidth, zorder=4)
-
-    if label is not None:
-        if label_position == "start":
-            pos = points[0]
-        elif label_position == "end":
-            pos = points[-1]
-        elif label_position == "center":
-            pos = points[len(points) // 2]
-        else:
-            raise ValueError(f"Unknown label position: {label_position}")
-
-        pos = pos + jnp.array(label_offset)
-
-        ax.text(
-            pos[0], pos[1], label,
-            color=color, fontsize=label_fontsize,
-            ha="center", va="center"
-        )
-
 def plot_colored_curve_directional_derivative_in_chart(
     ax,
     chart,
@@ -605,6 +326,182 @@ def plot_colored_curve_directional_derivative_in_chart(
                     raise ValueError("Label position for vertical colorbar must be 'left' or 'right'.")
 
     return line_collection
+
+
+
+
+
+def plot_curve_on_manifold(
+    ax,
+    curve,
+    lambda_range=(-jnp.pi, jnp.pi),
+    n_points=300,
+    color="black",
+    linewidth=2.0,
+    show_tangents=True,
+    tangent_step=20,
+    tangent_scale=0.4,
+    tangent_style=None,
+    tangent_method="finite_difference",  # or "autodiff"
+    label=None,
+    label_position="center",  # "center", "start", "end"
+    label_fontsize=14,
+    label_offset=(0, 0, 0.2)
+):
+    """
+    Plot a parametrized curve on the manifold with optional tangent arrows and label.
+
+    Args:
+        ax: Matplotlib 3D axis.
+        curve: A Curve object.
+        lambda_range: Tuple (lambda_min, lambda_max) for curve parameter range.
+        n_points: Number of sampling points along the curve.
+        color: Color of the curve and tangents.
+        linewidth: Width of the curve line.
+        show_tangents: Whether to plot tangent arrows.
+        tangent_step: Plot an arrow every 'tangent_step' points.
+        tangent_scale: Scale factor for arrow length.
+        tangent_style: Dict of arrow style kwargs (merged with defaults).
+        tangent_method: "finite_difference" (default) or "autodiff".
+        label: LaTeX string label for the curve (e.g. r"$\gamma$") or None.
+        label_position: "center", "start", or "end".
+        label_fontsize: Font size of the label.
+        label_offset: Tuple (dx, dy, dz) offset for label position.
+    """
+    # === Sample curve ===
+    lambda_vals = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+    points = curve.evaluate_on_manifold(lambda_vals)
+
+    # === Plot the curve ===
+    ax.plot(
+        points[:, 0],
+        points[:, 1],
+        points[:, 2],
+        color=color,
+        linewidth=linewidth
+    )
+
+    # === Plot tangent arrows ===
+    if show_tangents:
+        tangents = curve.tangent_vector_on_manifold(lambda_vals, method=tangent_method)
+        norms = jnp.linalg.norm(tangents, axis=1, keepdims=True)
+        unit_tangents = tangents / norms
+
+        sampled_points = points[::tangent_step]
+        sampled_tangents = unit_tangents[::tangent_step]
+
+        arrow_style = dict(
+            mutation_scale=1.0,
+            arrowstyle="->,head_length=4.,head_width=2.",
+            color=color,
+            lw=1.5,
+            alpha=0.7
+        )
+        if tangent_style is not None:
+            arrow_style.update(tangent_style)
+
+        for p, v in zip(sampled_points, sampled_tangents):
+            ax.add_artist(Arrow3D(
+                [float(p[0]), float(p[0] + v[0] * tangent_scale)],
+                [float(p[1]), float(p[1] + v[1] * tangent_scale)],
+                [float(p[2]), float(p[2] + v[2] * tangent_scale)],
+                **arrow_style
+            ))
+
+    # === Add label ===
+    if label is not None:
+        if label_position == "center":
+            idx = len(points) // 2
+        elif label_position == "start":
+            idx = 0
+        elif label_position == "end":
+            idx = -1
+        else:
+            raise ValueError(f"Invalid label_position: {label_position}")
+
+        p_label = points[idx]
+        dx, dy, dz = label_offset
+
+        ax.text(
+            p_label[0] + dx,
+            p_label[1] + dy,
+            p_label[2] + dz,
+            label,
+            fontsize=label_fontsize,
+            color=color
+        )
+
+def plot_tangent_vectors_on_manifold(
+    ax,
+    curve,
+    lambda_range=(-jnp.pi, jnp.pi),
+    n_points=300,
+    step=20,
+    scale=0.4,
+    method="finite_difference",
+    style=None
+):
+    """
+    Plot tangent vectors of a curve on the manifold as arrows.
+    """
+    lambda_vals = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+    points = curve.evaluate_on_manifold(lambda_vals)
+    tangents = curve.tangent_vector_on_manifold(lambda_vals, method=method)
+
+    norms = jnp.linalg.norm(tangents, axis=1, keepdims=True)
+    unit_tangents = tangents / norms
+
+    sampled_points = points[::step]
+    sampled_tangents = unit_tangents[::step]
+
+    default_style = dict(
+        mutation_scale=1.0,
+        arrowstyle="->,head_length=4.,head_width=2.",
+        color="black",
+        lw=1.5,
+        alpha=0.7
+    )
+    if style is not None:
+        default_style.update(style)
+
+    for p, v in zip(sampled_points, sampled_tangents):
+        ax.add_artist(Arrow3D(
+            [float(p[0]), float(p[0] + v[0] * scale)],
+            [float(p[1]), float(p[1] + v[1] * scale)],
+            [float(p[2]), float(p[2] + v[2] * scale)],
+            **default_style
+        ))
+
+def plot_curve_in_chart(
+    ax, chart, curve,
+    lambda_range=(-jnp.pi, jnp.pi), n_points=300,
+    color="black", linewidth=2.0,
+    label=None, label_position="end", label_offset=(0.2, 0.2),
+    label_fontsize=16
+):
+    lambdas = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+    points = chart.map_to_chart(curve.evaluate_in_param_space(lambdas))
+
+    ax.plot(points[:, 0], points[:, 1],
+            color=color, linewidth=linewidth, zorder=4)
+
+    if label is not None:
+        if label_position == "start":
+            pos = points[0]
+        elif label_position == "end":
+            pos = points[-1]
+        elif label_position == "center":
+            pos = points[len(points) // 2]
+        else:
+            raise ValueError(f"Unknown label position: {label_position}")
+
+        pos = pos + jnp.array(label_offset)
+
+        ax.text(
+            pos[0], pos[1], label,
+            color=color, fontsize=label_fontsize,
+            ha="center", va="center"
+        )
 
 def plot_chart_components_of_curve_tangent(
     ax, chart, curve,
@@ -852,68 +749,3 @@ def plot_vector_field_in_chart(
         inset_ax.set_facecolor(inset_box_color)
         inset_ax.patch.set_alpha(inset_box_alpha)
 
-def plot_function_in_chart(
-    ax,
-    chart,
-    function,
-    param_sampling_bounds,
-    chart_xlim,
-    chart_ylim,
-    resolution=200,
-    cmap="viridis",
-    alpha=0.8,
-    label_function=None,
-    shading="gouraud"
-):
-    """
-    Plot the scalar function values over a chart using Delaunay triangulation.
-
-    Args:
-        ax: Matplotlib 2D axis.
-        chart: Chart object.
-        function: Function object defined on the manifold.
-        param_sampling_bounds: ((xmin, xmax), (ymin, ymax)) in parameter space.
-        chart_xlim: Plot limits in chart x direction.
-        chart_ylim: Plot limits in chart y direction.
-        resolution: Number of grid points per axis.
-        cmap: Colormap.
-        alpha: Transparency.
-        label_function: Label for the colorbar (optional).
-        shading: 'gouraud' (smooth) or 'flat'.
-    """
-
-    # === Build sampling grid in parameter space ===
-    (x_min, x_max), (y_min, y_max) = param_sampling_bounds
-    xv = jnp.linspace(x_min, x_max, resolution)
-    yv = jnp.linspace(y_min, y_max, resolution)
-    XX, YY = jnp.meshgrid(xv, yv)
-    param_points = jnp.stack([XX.ravel(), YY.ravel()], axis=-1)
-
-    # === Map to chart coordinates ===
-    chart_points = chart.map_to_chart(param_points)
-
-    # === Evaluate function ===
-    F_vals = function.evaluate_in_param_space(param_points)
-
-    # === Triangulate in chart space ===
-    triang = Triangulation(chart_points[:, 0], chart_points[:, 1])
-
-    # === Plot ===
-    tpc = ax.tripcolor(
-        triang,
-        F_vals,
-        cmap=cmap,
-        shading=shading,
-        alpha=alpha
-    )
-
-    # === Colorbar ===
-    cbar = plt.colorbar(tpc, ax=ax, shrink=0.8, pad=0.02)
-    if label_function:
-        cbar.set_label(label_function, fontsize=12)
-
-    # === Plot limits ===
-    ax.set_xlim(chart_xlim)
-    ax.set_ylim(chart_ylim)
-
-    return tpc
