@@ -215,6 +215,57 @@ class Chart:
         results = jax.vmap(optimize_single)(x_target, initial_guess)
         return results
 
+def polar_region_sampler_from_boundary(
+    boundary: np.ndarray,
+    center: Optional[np.ndarray] = None,
+) -> Callable[[int], jnp.ndarray]:
+    """
+    Return a region_sampler(n_points) that adapts polar mesh resolution to n_points.
+    """
+    if boundary.ndim != 2 or boundary.shape[1] != 2:
+        raise ValueError("Boundary must have shape (N, 2)")
+
+    if center is None:
+        center = np.mean(boundary, axis=0)
+    else:
+        center = np.asarray(center)
+        if center.shape != (2,):
+            raise ValueError("Provided center must be a 1D array of shape (2,)")
+
+    boundary_path = Path(boundary)
+
+    def region_sampler(n_points: int) -> jnp.ndarray:
+        # Determine radial and angular resolution heuristically
+        n_radial = max(3, int(np.sqrt(n_points) // 2))
+        n_angular = max(6, int(n_points // n_radial))
+
+        # Estimate max radius
+        vectors = boundary - center
+        radii = np.linalg.norm(vectors, axis=1)
+        max_radius = np.max(radii)
+
+        # Build mesh
+        r = np.linspace(0.0, 1.0, n_radial + 1)[1:] * max_radius
+        theta = np.linspace(0.0, 2 * np.pi, n_angular, endpoint=False)
+        R, Theta = np.meshgrid(r, theta, indexing="ij")
+
+        x = R * np.cos(Theta) + center[0]
+        y = R * np.sin(Theta) + center[1]
+        grid_points = np.stack([x, y], axis=-1).reshape(-1, 2)
+
+        # Filter only inside
+        mask = boundary_path.contains_points(grid_points)
+        inside_points = grid_points[mask]
+
+        # Downsample if needed
+        if len(inside_points) > n_points:
+            idx = np.random.choice(len(inside_points), size=n_points, replace=False)
+            inside_points = inside_points[idx]
+
+        return jnp.array(inside_points)
+
+    return region_sampler
+
 def compute_chart_intersection(boundary_U, boundary_V) -> np.ndarray:
     """
     Compute the intersection region between two chart domains in parameter space.
@@ -349,7 +400,6 @@ def inverse_polar_chart_map(chart_coords, center=(0.0, 0.0)):
     result = jnp.stack([x, y], axis=-1)
     return result if chart_coords.shape[0] > 1 else result[0]
 
-
 def boundary_ellipse_in_param_space(lambdas, center=(1.0, 0.0), axes=(1.5, 1.0)):
     """
     Parametric boundary of an ellipse in parameter space.
@@ -367,60 +417,3 @@ def boundary_ellipse_in_param_space(lambdas, center=(1.0, 0.0), axes=(1.5, 1.0))
     x = a * jnp.cos(lambdas) + x_center
     y = b * jnp.sin(lambdas) + y_center
     return jnp.stack([x, y], axis=-1)
-
-def polar_region_sampler_from_boundary(
-    boundary: np.ndarray,
-    n_radial: int = 30,
-    n_angular: int = 60,
-    center: Optional[np.ndarray] = None
-) -> Callable[[Optional[int]], jnp.ndarray]:
-    """
-    Create a polar-meshgrid-based sampler adapted to a closed elliptical-like region.
-
-    Args:
-        boundary: (N, 2) array of boundary points (must be closed).
-        n_radial: Number of radial divisions for the full meshgrid.
-        n_angular: Number of angular divisions for the full meshgrid.
-        center: Optional array (2,) defining the center of the polar mesh.
-                If not provided, the centroid of the boundary is used.
-
-    Returns:
-        A callable: region_sampler(n_points) → jnp.ndarray of shape (M, 2)
-    """
-    if boundary.ndim != 2 or boundary.shape[1] != 2:
-        raise ValueError("Boundary must have shape (N, 2)")
-
-    if center is None:
-        center = np.mean(boundary, axis=0)
-    else:
-        center = np.asarray(center)
-        if center.shape != (2,):
-            raise ValueError("Provided center must be a 1D array of shape (2,)")
-
-    # Compute max radius from center to boundary
-    vectors = boundary - center
-    radii = np.linalg.norm(vectors, axis=1)
-    max_radius = np.max(radii)
-
-    # Create polar grid
-    r = np.linspace(0.0, 1.0, n_radial + 1)[1:] * max_radius  # avoid r=0
-    theta = np.linspace(0.0, 2 * np.pi, n_angular, endpoint=False)
-    R, Theta = np.meshgrid(r, theta, indexing="ij")
-
-    x = R * np.cos(Theta) + center[0]
-    y = R * np.sin(Theta) + center[1]
-    grid_points = np.stack([x, y], axis=-1).reshape(-1, 2)
-
-    # Keep only points inside the region
-    boundary_path = Path(boundary)
-    mask = boundary_path.contains_points(grid_points)
-    filtered_points = grid_points[mask]
-
-    def region_sampler(n_points: Optional[int]) -> jnp.ndarray:
-        if n_points is None or n_points >= len(filtered_points):
-            return jnp.array(filtered_points)
-        else:
-            idx = np.random.choice(len(filtered_points), size=n_points, replace=False)
-            return jnp.array(filtered_points[idx])
-
-    return region_sampler

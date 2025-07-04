@@ -195,6 +195,43 @@ def _identify_boundary_vertex_indices(param_points, simplices):
     boundary_vertex_indices = np.unique(boundary_edges)
     return boundary_vertex_indices
 
+def _reorder_boundary_vertices(boundary_edges, start_idx=None):
+    """
+    Reorder boundary edges into a continuous loop of vertex indices.
+
+    Args:
+        boundary_edges: (M, 2) array of edge vertex index pairs.
+        start_idx: Optional starting vertex index.
+
+    Returns:
+        (K,) array of ordered vertex indices forming the boundary loop.
+    """
+    # Build adjacency map
+    adjacency = {}
+    for i, j in boundary_edges:
+        adjacency.setdefault(i, []).append(j)
+        adjacency.setdefault(j, []).append(i)
+
+    # Find a starting point
+    if start_idx is None:
+        start_idx = boundary_edges[0][0]
+
+    ordered = [start_idx]
+    visited = {start_idx}
+    current = start_idx
+
+    while True:
+        neighbors = [n for n in adjacency[current] if n not in visited]
+        if not neighbors:
+            break
+        next_vertex = neighbors[0]
+        ordered.append(next_vertex)
+        visited.add(next_vertex)
+        current = next_vertex
+
+    return np.array(ordered)
+
+
 def plot_parametric_region_in_chart_coordinates(
     ax,
     chart,
@@ -203,13 +240,12 @@ def plot_parametric_region_in_chart_coordinates(
     linestyle="dashed",
     linewidth=1.5,
     alpha=0.2,
-    edgecolor="none",
     label=None,
     label_position="center",
     label_fontsize=14,
     tessellated=False,
     simplices=None,
-    tessellation_edgecolor="gray",
+    tessellation_edgecolor="none",
     tessellation_linewidth=0.1,
     mark_boundary_points=False,
     boundary_marker_color="black",
@@ -228,7 +264,6 @@ def plot_parametric_region_in_chart_coordinates(
         linestyle: Line style (used if tessellated=False).
         linewidth: Line width (used if tessellated=False).
         alpha: Fill transparency.
-        edgecolor: Outline color (only used if not tessellated).
         label: Optional label string.
         label_position: "center", "top", "bottom", "left", "right".
         label_fontsize: Font size.
@@ -266,14 +301,18 @@ def plot_parametric_region_in_chart_coordinates(
                 linewidth=tessellation_linewidth
             )
 
+        # --- Identify boundary edges and reorder them ---
+        boundary_edges = _identify_boundary_edges(simplices)
+        boundary_vertex_indices = _reorder_boundary_vertices(boundary_edges)
+        boundary_coords_param = param_space_data[boundary_vertex_indices]
+        boundary_coords_chart = chart_map(jnp.array(boundary_coords_param))
+
+        # --- Remove any NaNs before plotting ---
+        valid = ~jnp.isnan(boundary_coords_chart).any(axis=1)
+        boundary_coords_chart = boundary_coords_chart[valid]
+
+        # --- Optional scatter markers ---
         if mark_boundary_points:
-            boundary_vertex_indices = _identify_boundary_vertex_indices(param_space_data, simplices)
-            boundary_coords_param = param_space_data[boundary_vertex_indices]
-            boundary_coords_chart = chart_map(jnp.array(boundary_coords_param))
-
-            valid = ~jnp.isnan(boundary_coords_chart).any(axis=1)
-            boundary_coords_chart = boundary_coords_chart[valid]
-
             ax.scatter(
                 boundary_coords_chart[:, 0],
                 boundary_coords_chart[:, 1],
@@ -281,6 +320,16 @@ def plot_parametric_region_in_chart_coordinates(
                 s=boundary_marker_size,
                 zorder=10
             )
+
+        # --- Proper boundary line ---
+        ax.plot(
+            boundary_coords_chart[:, 0],
+            boundary_coords_chart[:, 1],
+            color=color,
+            linestyle=linestyle,
+            linewidth=linewidth,
+            zorder=3
+        )
 
         if label is not None and len(mapped_triangles) > 0:
             all_pts = mapped_triangles.reshape(-1, 2)
