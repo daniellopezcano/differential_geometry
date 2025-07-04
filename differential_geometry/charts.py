@@ -1,9 +1,18 @@
 from typing import Callable, Optional, Union, Tuple
-import jax.numpy as jnp
+
 import numpy as np
+
+import jax
+import jax.numpy as jnp
+from jax import jit, value_and_grad
+
+import optax
+
 from scipy.spatial import Delaunay
 from scipy.optimize import minimize
+
 from shapely.geometry import Polygon
+from matplotlib.path import Path
 
 class Chart:
     def __init__(
@@ -13,6 +22,7 @@ class Chart:
         boundary: Union[Tuple[float, float], np.ndarray],
         chart_map: Callable[[jnp.ndarray], jnp.ndarray],
         region_sampler: Optional[Callable[[int], jnp.ndarray]] = None,
+        inverse_chart_map: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None,
     ):
         """
         Initialize a coordinate chart on a manifold.
@@ -20,53 +30,37 @@ class Chart:
         Args:
             name: Chart name (for reference).
             manifold: A Manifold object.
-            boundary: 
+            boundary:
                 - If param_dim == 1: tuple (t_min, t_max) for interval in parameter space.
                 - If param_dim == 2: array of shape (N, 2), closed non-self-intersecting curve.
             chart_map: Function from parameter space to chart coordinates.
             region_sampler: Optional sampling function; otherwise a default is selected.
+            inverse_chart_map: Optional inverse of chart_map, if available.
         """
         self.name = name
         self.manifold = manifold
         self.chart_map = chart_map
+        self.inverse_chart_map = inverse_chart_map
 
         param_dim = manifold.param_dim
         ambient_dim = manifold.ambient_dim
 
-        # Enforce supported dimensionalities
-        supported_dims = {
-            (1, 2),
-            (1, 3),
-            (2, 3),
-        }
+        supported_dims = {(1, 2), (1, 3), (2, 3)}
         if (param_dim, ambient_dim) not in supported_dims:
-            raise ValueError(
-                f"Unsupported chart configuration: (param_dim={param_dim}, ambient_dim={ambient_dim})\n"
-                f"Allowed: {supported_dims}"
-            )
+            raise ValueError(f"Unsupported chart configuration: {(param_dim, ambient_dim)} not in {supported_dims}")
 
-        # Check boundary object
         if param_dim == 1:
             if not (isinstance(boundary, tuple) and len(boundary) == 2):
-                raise ValueError(
-                    "For 1D charts, boundary must be a tuple (t_min, t_max)"
-                )
+                raise ValueError("For 1D charts, boundary must be a tuple (t_min, t_max)")
             self.boundary_interval = boundary
         elif param_dim == 2:
             boundary = np.asarray(boundary)
             if boundary.ndim != 2 or boundary.shape[1] != 2:
-                raise ValueError(
-                    "For 2D charts, boundary must be a 2D array of shape (N, 2)"
-                )
+                raise ValueError("For 2D charts, boundary must be an array of shape (N, 2)")
             if not np.allclose(boundary[0], boundary[-1], atol=1e-6):
-                raise ValueError(
-                    "Boundary curve for 2D chart must be closed (first and last points must match)"
-                )
+                raise ValueError("Boundary curve must be closed.")
             self.boundary_curve = boundary
-        else:
-            raise NotImplementedError("Only param_dim = 1 or 2 are currently supported.")
 
-        # Select appropriate region sampler
         if region_sampler is not None:
             self.region_sampler = region_sampler
         else:
@@ -160,10 +154,6 @@ class Chart:
 
         return sampler
 
-    # ================================================================
-    # === Inverse map (numerical) ====================================
-    # ================================================================
-
     def sample_region_in_param_space(
         self, n_points: int = 2000
     ) -> jnp.ndarray:
@@ -178,41 +168,52 @@ class Chart:
         """
         return self.region_sampler(n_points)
 
-    def inverse_map(self, x_target, initial_guess=None):
+    def inverse_map(self, x_target, initial_guess=None, n_iters=100, lr=0.05):
         """
-        Numerically invert the chart map to find param_point such that:
-            chart_map(param_point) ≈ x_target
+        Inverse map via user-defined function or differentiable gradient descent.
 
         Args:
-            x_target: Array of shape (..., chart_dim) — point(s) in chart coordinates.
-            initial_guess: Optional array of shape (..., param_dim)
+            x_target: Array (..., chart_dim) — target in chart coords
+            initial_guess: Optional array (..., param_dim)
+            n_iters: Number of optax steps
+            lr: Learning rate for gradient descent
 
         Returns:
-            param_points: Array of shape (..., param_dim)
+            Approximate preimages (..., param_dim)
         """
         x_target = jnp.atleast_2d(jnp.array(x_target))
-
         param_dim = self.manifold.param_dim
-        chart_dim = x_target.shape[-1]
 
-        # Initial guess
+        if self.inverse_chart_map is not None:
+            return jax.vmap(self.inverse_chart_map)(x_target)
+
+        # Fallback to autodiff-based gradient descent inversion
         if initial_guess is None:
-            initial_guess = jnp.mean(self.sample_region_in_param_space(500), axis=0)
-            initial_guess = jnp.broadcast_to(initial_guess, (x_target.shape[0], param_dim))
+            ig = jnp.mean(self.sample_region_in_param_space(500), axis=0)
+            initial_guess = jnp.broadcast_to(ig, (x_target.shape[0], param_dim))
 
-        results = []
-        for xt, ig in zip(x_target, initial_guess):
-            def objective(u):
-                x = jnp.array(self.map_to_chart(jnp.array(u)))
-                return jnp.sum((x - xt) ** 2)
+        def loss_fn(u, x_target_single):
+            x_est = self.map_to_chart(u)
+            return jnp.sum((x_est - x_target_single) ** 2)
 
-            result = minimize(objective, x0=ig, method='L-BFGS-B')
-            if not result.success:
-                raise RuntimeError(f"Inversion failed at point {xt}: {result.message}")
-            results.append(result.x)
+        @jit
+        def optimize_single(x_target_single, u0):
+            opt = optax.adam(lr)
+            opt_state = opt.init(u0)
 
-        return jnp.array(results)  # shape (N, param_dim)
+            def step_fn(u, opt_state):
+                loss, grad = value_and_grad(loss_fn)(u, x_target_single)
+                updates, opt_state = opt.update(grad, opt_state)
+                u = optax.apply_updates(u, updates)
+                return u, opt_state
 
+            u = u0
+            for _ in range(n_iters):
+                u, opt_state = step_fn(u, opt_state)
+            return u
+
+        results = jax.vmap(optimize_single)(x_target, initial_guess)
+        return results
 
 def compute_chart_intersection(boundary_U, boundary_V) -> np.ndarray:
     """
@@ -282,3 +283,144 @@ def compute_chart_intersection(boundary_U, boundary_V) -> np.ndarray:
     
     raise ValueError("Unsupported boundary formats. Expected 1D intervals or 2D polygons.")
 
+def cartesian_chart_map(params):
+    """
+    Chart map for U: Identity map (x, y) → (x, y).
+    """
+    return params
+
+def inverse_cartesian_chart_map(chart_coords):
+    """
+    Inverse of the identity map (x, y) → (x, y).
+    """
+    return chart_coords  # trivial identity
+
+def polar_chart_map(params, center=(0.0, 0.0)):
+    """
+    Chart map for V: Maps (x, y) in param space to (r, θ) in polar coordinates.
+
+    Args:
+        params: Array of shape (N, 2) or (2,) — parameter points.
+        center: (x_center, y_center) — pole of the polar chart.
+
+    Returns:
+        Array of shape (N, 2) or (2,) with (r, θ) in chart space.
+        Returns NaNs for points that are ill-defined.
+    """
+    params = jnp.atleast_2d(params)
+
+    x = params[:, 0] - center[0]
+    y = params[:, 1] - center[1]
+
+    # Check validity: finite x and y
+    valid = jnp.isfinite(x) & jnp.isfinite(y)
+
+    # Compute r and theta normally
+    r = jnp.sqrt(x**2 + y**2)
+    theta = jnp.arctan2(y, x)
+
+    # Where invalid, set r and theta to NaN
+    r = jnp.where(valid, r, jnp.nan)
+    theta = jnp.where(valid, theta, jnp.nan)
+
+    result = jnp.stack([r, theta], axis=-1)
+
+    return result if params.shape[0] > 1 else result[0]
+
+def inverse_polar_chart_map(chart_coords, center=(0.0, 0.0)):
+    """
+    Inverse of the polar chart map: (r, θ) → (x, y).
+
+    Args:
+        chart_coords: Array of shape (N, 2) or (2,) with (r, θ)
+        center: (x_center, y_center) — origin of the polar chart
+
+    Returns:
+        Param space point(s) (x, y)
+    """
+    chart_coords = jnp.atleast_2d(chart_coords)
+
+    r = chart_coords[:, 0]
+    theta = chart_coords[:, 1]
+
+    x = r * jnp.cos(theta) + center[0]
+    y = r * jnp.sin(theta) + center[1]
+
+    result = jnp.stack([x, y], axis=-1)
+    return result if chart_coords.shape[0] > 1 else result[0]
+
+
+def boundary_ellipse_in_param_space(lambdas, center=(1.0, 0.0), axes=(1.5, 1.0)):
+    """
+    Parametric boundary of an ellipse in parameter space.
+
+    Args:
+        lambdas (array): Angles [0, 2π] parameterizing the ellipse.
+        center (tuple): (x_center, y_center) of the ellipse.
+        axes (tuple): (a, b) semi-axes along x and y directions.
+
+    Returns:
+        Array of shape (N, 2) with (x, y) boundary points.
+    """
+    x_center, y_center = center
+    a, b = axes
+    x = a * jnp.cos(lambdas) + x_center
+    y = b * jnp.sin(lambdas) + y_center
+    return jnp.stack([x, y], axis=-1)
+
+def polar_region_sampler_from_boundary(
+    boundary: np.ndarray,
+    n_radial: int = 30,
+    n_angular: int = 60,
+    center: Optional[np.ndarray] = None
+) -> Callable[[Optional[int]], jnp.ndarray]:
+    """
+    Create a polar-meshgrid-based sampler adapted to a closed elliptical-like region.
+
+    Args:
+        boundary: (N, 2) array of boundary points (must be closed).
+        n_radial: Number of radial divisions for the full meshgrid.
+        n_angular: Number of angular divisions for the full meshgrid.
+        center: Optional array (2,) defining the center of the polar mesh.
+                If not provided, the centroid of the boundary is used.
+
+    Returns:
+        A callable: region_sampler(n_points) → jnp.ndarray of shape (M, 2)
+    """
+    if boundary.ndim != 2 or boundary.shape[1] != 2:
+        raise ValueError("Boundary must have shape (N, 2)")
+
+    if center is None:
+        center = np.mean(boundary, axis=0)
+    else:
+        center = np.asarray(center)
+        if center.shape != (2,):
+            raise ValueError("Provided center must be a 1D array of shape (2,)")
+
+    # Compute max radius from center to boundary
+    vectors = boundary - center
+    radii = np.linalg.norm(vectors, axis=1)
+    max_radius = np.max(radii)
+
+    # Create polar grid
+    r = np.linspace(0.0, 1.0, n_radial + 1)[1:] * max_radius  # avoid r=0
+    theta = np.linspace(0.0, 2 * np.pi, n_angular, endpoint=False)
+    R, Theta = np.meshgrid(r, theta, indexing="ij")
+
+    x = R * np.cos(Theta) + center[0]
+    y = R * np.sin(Theta) + center[1]
+    grid_points = np.stack([x, y], axis=-1).reshape(-1, 2)
+
+    # Keep only points inside the region
+    boundary_path = Path(boundary)
+    mask = boundary_path.contains_points(grid_points)
+    filtered_points = grid_points[mask]
+
+    def region_sampler(n_points: Optional[int]) -> jnp.ndarray:
+        if n_points is None or n_points >= len(filtered_points):
+            return jnp.array(filtered_points)
+        else:
+            idx = np.random.choice(len(filtered_points), size=n_points, replace=False)
+            return jnp.array(filtered_points[idx])
+
+    return region_sampler
