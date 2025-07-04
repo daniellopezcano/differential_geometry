@@ -545,6 +545,10 @@ def plot_chart_components_of_curve_tangent(
             length_includes_head=length_includes_head
         )
 
+
+
+
+
 def plot_vector_field_on_manifold(
     ax,
     field,

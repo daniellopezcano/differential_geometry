@@ -93,7 +93,7 @@ class Manifold:
         return jacobian.reshape(params.shape[:-1] + (self.param_dim, self.ambient_dim))
 
 
-def surface_embedding_factory(
+def factory_surface_embedding_gaussian_eggs(
     amplitude=1.0,
     center=(0.0, 0.0),
     sigma=(jnp.pi, jnp.pi)
