@@ -224,10 +224,6 @@ def plot_manifold(
     else:
         raise NotImplementedError(f"Plotting for (param_dim={param_dim}, ambient_dim={ambient_dim}) is not implemented.")
 
-
-
-
-
 def plot_tangent_vectors(
     ax,
     embedded_points,
@@ -358,7 +354,6 @@ def plot_tangent_spaces(
         label_fontsize: Font size for labels.
         label_offset: Multiplier for text label offset along direction.
     """
-    import numpy as np
 
     N, D = embedded_points.shape
     _, param_dim, D2 = jacobians.shape

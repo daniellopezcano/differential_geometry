@@ -70,70 +70,110 @@ class Curve:
 
         return embedded if embedded.ndim == 2 else embedded[0]
 
-    def tangent_vector_on_manifold(self, lambdas, method="autodiff", delta=1e-5):
-        """
-        Compute the tangent vector embedded in the manifold (ambient space).
-
-        Args:
-            lambdas: Array of λ values (shape (N,)) or scalar.
-            method: 'autodiff' (default) or 'finite_difference'.
-            delta: Step size for finite differences.
-
-        Returns:
-            Array of shape (N, ambient_dim) or (ambient_dim,) if single λ.
-        """
-        lambdas = jnp.atleast_1d(lambdas)
-
-        if method == "finite_difference":
-            plus = self.evaluate_on_manifold(lambdas + delta)
-            minus = self.evaluate_on_manifold(lambdas - delta)
-            tangent = (plus - minus) / (2 * delta)
-
-        elif method == "autodiff":
-            def gamma_fn(lmb):
-                param = self.parametric_function(jnp.atleast_1d(lmb))
-                return self.manifold.embed(param)
-
-            jac_fn = jax.vmap(jax.jacrev(gamma_fn))
-            tangent = jac_fn(lambdas).squeeze(-1)  # Remove trailing dim
-
-        else:
-            raise ValueError(f"Unknown method: {method}")
-
-        return tangent if lambdas.shape[0] > 1 else tangent[0]
-
-    def evaluate_in_chart(self, chart, lambdas):
+    def evaluate_in_chart(self, chart, lambdas: jnp.ndarray) -> jnp.ndarray:
         """
         Evaluate the curve in chart coordinates: X(gamma(lambda)).
 
         Args:
             chart: Chart object.
-            lambdas: array-like
+            lambdas: Array of λ values.
 
         Returns:
             Array of shape (N, chart_dim)
         """
+        if chart.manifold != self.manifold:
+            raise ValueError("Chart must belong to the same manifold as the curve.")
+
         param_points = self.evaluate_in_param_space(lambdas)
         return chart.map_to_chart(param_points)
-    
-    def tangent_vector_components_in_chart(self, chart, lambdas, method="autodiff", delta=1e-5):
-        lambdas = jnp.atleast_1d(lambdas)
 
-        if method == "finite_difference":
-            plus = self.evaluate_in_chart(chart, lambdas + delta)
-            minus = self.evaluate_in_chart(chart, lambdas - delta)
-            tangents = (plus - minus) / (2 * delta)
+    def derivative_in_chart(self, chart, lambdas: jnp.ndarray) -> jnp.ndarray:
+        """
+        Compute the derivative d/dλ of the chart-coordinate representation of the curve:
+            d/dλ [ X(γ(λ)) ]
 
-        elif method == "autodiff":
-            def composed_fn(lmb):
-                return chart.map_to_chart(self.parametric_function(jnp.atleast_1d(lmb)))
-            jac_fn = jax.vmap(jax.jacrev(composed_fn))
-            tangents = jnp.squeeze(jac_fn(lambdas), axis=1)
+        Args:
+            chart: Chart object.
+            lambdas: Array of λ values.
 
-        else:
-            raise ValueError(f"Unknown method: {method}")
+        Returns:
+            Array of shape (N, chart_dim): derivatives of each chart coordinate component
+        """
+        if chart.manifold != self.manifold:
+            raise ValueError("Chart must belong to the same manifold as the curve.")
 
-        return tangents if lambdas.shape[0] > 1 else tangents[0]
+        def composed_func(lambda_scalar):
+            # γ(λ)
+            param_point = self.parametric_function(lambda_scalar)
+            # X(γ(λ))
+            return chart.map_to_chart(param_point)
+        
+        # Use `jax.jacrev` for vector-valued output, one derivative per component
+        return jax.vmap(jax.jacrev(composed_func))(lambdas)
+
+    def directional_derivative_on_manifold(self, lambdas: jnp.ndarray) -> jnp.ndarray:
+        """
+        Compute the pushforward (directional derivative) of the curve at given λ values.
+
+        This corresponds to:
+            d/dλ [Φ(γ(λ))] = DΦ_{γ(λ)} · γ'(λ)
+
+        Args:
+            lambdas: Array of shape (N,) with scalar λ values.
+
+        Returns:
+            Array of shape (N, ambient_dim): the tangent vectors at each point on the manifold.
+        """
+        lambdas = jnp.asarray(lambdas)
+
+        # Step 1: Evaluate parametric function γ(λ)
+        param_points = jax.vmap(self.parametric_function)(lambdas)  # (N, param_dim)
+
+        # Step 2: Compute γ'(λ) ∈ T_{γ(λ)}(param space)
+        param_derivs = jax.vmap(jax.jacrev(self.parametric_function))(lambdas)  # (N, param_dim)
+
+        # Step 3: Compute Jacobian of Φ at γ(λ): DΦ_{γ(λ)} ∈ ℝ^{param_dim × ambient_dim}
+        jacobian = self.manifold.derivatives_at_params(param_points)  # (N, param_dim, ambient_dim)
+
+        # Step 4: Pushforward: DΦ(γ(λ)) · γ'(λ)
+        tangents = jnp.einsum("nij,ni->nj", jacobian, param_derivs)  # (N, ambient_dim)
+
+        return tangents
+
+    def compute_tangent_vectors_on_manifold(
+        self,
+        lambda_range=(0, 2 * jnp.pi),
+        n_points=500,
+        n_arrows=30,
+    ):
+        """
+        Compute normalized tangent vectors of the curve in the ambient manifold space.
+
+        Args:
+            lambda_range: Tuple (min, max) defining the parameter interval.
+            n_points: Number of lambda values for full resolution.
+            n_arrows: Number of tangent vectors to subsample.
+
+        Returns:
+            Tuple (positions, tangents): both arrays of shape (n_arrows, ambient_dim).
+        """
+        lambdas = jnp.linspace(lambda_range[0], lambda_range[1], n_points)
+        positions = self.evaluate_on_manifold(lambdas)
+        tangents = self.directional_derivative_on_manifold(lambdas)
+
+        # Subsample
+        stride = max(1, len(lambdas) // n_arrows)
+        sub_positions = positions[::stride]
+        sub_tangents = tangents[::stride]
+
+        # Normalize tangent vectors
+        norms = jnp.linalg.norm(sub_tangents, axis=1, keepdims=True)
+        normed_tangents = sub_tangents / norms
+
+        return sub_positions, normed_tangents
+
+
+
 
 
 
