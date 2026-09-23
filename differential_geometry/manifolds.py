@@ -6,34 +6,22 @@ import jax.numpy as jnp
 class Manifold:
     def __init__(
         self,
-        param_dim: int,
+        name: str,
+        dim: int,
         ambient_dim: int,
-        embedding_func: Callable[[jnp.ndarray], jnp.ndarray],
+        embedding_func: Callable[[jnp.ndarray], jnp.ndarray]
     ):
         """
         Manifold embedded in R^n.
 
         Args:
-            param_dim: Dimension of the parameter space (e.g., 1D curve, 2D surface).
+            name: Name of the manifold (for reference).
+            dim: Dimension of the parameter space (e.g., 1D curve, 2D surface).
             ambient_dim: Dimension of the ambient space (e.g., 2D or 3D).
-            embedding_func: Function f: R^{param_dim} -> R^{ambient_dim}
-                that defines the manifold embedding.
+            embedding_func: Function f: R^{dim} -> R^{ambient_dim} that defines the manifold embedding.
         """
-        valid_combinations = {
-            (1, 1),
-            (1, 2),
-            (1, 3),
-            (2, 2),
-            (2, 3),
-            (3, 3),
-        }
-        if (param_dim, ambient_dim) not in valid_combinations:
-            raise ValueError(
-                f"Invalid (param_dim, ambient_dim) = ({param_dim}, {ambient_dim}). "
-                "Allowed combinations: " + ", ".join(map(str, valid_combinations))
-            )
-
-        self.param_dim = param_dim
+        self.name = name
+        self.dim = dim
         self.ambient_dim = ambient_dim
         self.embedding_func = embedding_func
 
@@ -42,97 +30,64 @@ class Manifold:
         Evaluate the embedding for a batch of parameter points.
 
         Args:
-            params: Array of shape (..., param_dim) — parameter points.
+            params: Array of shape (..., dim) — parameter points.
 
         Returns:
             Array of shape (..., ambient_dim) — embedded points.
         """
         params = jnp.asarray(params)
-        if params.shape[-1] != self.param_dim:
+        if params.shape[-1] != self.dim:
             raise ValueError(
-                f"Expected params.shape[-1] == {self.param_dim}, but got {params.shape[-1]}"
+                f"Expected params.shape[-1] == {self.dim}, but got {params.shape[-1]}"
             )
 
-        # Ensure input is at least 2D for consistent vectorization
-        params_2d = params.reshape(-1, self.param_dim)
-        embedded = jax.vmap(self.embedding_func)(params_2d)
+        # Reshape input for consistent vectorization
+        params_ = params.reshape(-1, self.dim)
+        embedded_ = jax.vmap(self.embedding_func)(params_)
 
-        if embedded.shape[-1] != self.ambient_dim:
+        if embedded_.shape[-1] != self.ambient_dim:
             raise ValueError(
-                f"Embedding function output has last dim {embedded.shape[-1]}, "
+                f"Embedding function output has last dim {embedded_.shape[-1]}, "
                 f"but expected ambient_dim = {self.ambient_dim}."
             )
+        
+        # Reshape embedded output to match original shape (..., ambient_dim)
+        embedded = embedded_.reshape(params.shape[:-1] + (self.ambient_dim,))
 
-        return embedded.reshape(params.shape[:-1] + (self.ambient_dim,))
+        return embedded
 
-    def derivatives_at_params(self, params: jnp.ndarray) -> jnp.ndarray:
+    def derivatives_at_params(self, params: jnp.ndarray, jack_mode: str = "jacrev") -> jnp.ndarray:
         """
-        Compute the Jacobian matrix ∂Φ/∂param_dim for a batch of parameter points.
+        Compute the Jacobian matrix ∂Φ/∂dim for a batch of parameter points.
 
         Args:
-            params: Array of shape (..., param_dim).
+            params: Array of shape (..., dim).
+            jack_mode: str, "jacfwd" or "jacrev"
 
         Returns:
-            Array of shape (..., param_dim, ambient_dim) containing all directional derivatives
+            Array of shape (..., dim, ambient_dim) containing all directional derivatives
             at each point in parameter space.
         """
         params = jnp.asarray(params)
-        if params.shape[-1] != self.param_dim:
+        if params.shape[-1] != self.dim:
             raise ValueError(
-                f"Expected params.shape[-1] == {self.param_dim}, but got {params.shape[-1]}"
+                f"Expected params.shape[-1] == {self.dim}, but got {params.shape[-1]}"
             )
 
-        params_2d = params.reshape(-1, self.param_dim)
+        # Reshape input for consistent vectorization
+        params_ = params.reshape(-1, self.dim)
 
-        # Compute jacobian of shape (N, ambient_dim, param_dim)
-        jacobian = jax.vmap(jax.jacrev(self.embedding_func))(params_2d)
+        # Compute jacobian of shape (N, ambient_dim, dim)
+        if jack_mode == "jacfwd":
+            jacobian_ = jax.vmap(jax.jacfwd(self.embedding_func))(params_)
+        elif jack_mode == "jacrev":
+            jacobian_ = jax.vmap(jax.jacrev(self.embedding_func))(params_)
 
-        # Transpose to (N, param_dim, ambient_dim)
-        jacobian = jnp.transpose(jacobian, axes=(0, 2, 1))
+        # Transpose to (N, dim, ambient_dim)
+        jacobian_ = jnp.transpose(jacobian_, axes=(0, 2, 1))
+    
+        # Reshape jacobian to match original shape (..., dim, ambient_dim)
+        jacobian = jacobian_.reshape(params.shape[:-1] + (self.dim, self.ambient_dim))
 
-        return jacobian.reshape(params.shape[:-1] + (self.param_dim, self.ambient_dim))
+        return jacobian
 
-
-def factory_surface_embedding_gaussian_eggs(
-    amplitude=1.0,
-    center=(0.0, 0.0),
-    sigma=(jnp.pi, jnp.pi)
-):
-    """
-    Creates an embedding function for the manifold.
-
-    The manifold is shaped by an 'egg-carton' surface modulated by a Gaussian envelope.
-
-    Args:
-        amplitude: Amplitude of the Gaussian envelope.
-        center: Tuple (mu_x, mu_y) — center of the Gaussian.
-        sigma: Tuple (sigma_x, sigma_y) — standard deviations of the Gaussian.
-
-    Returns:
-        embedding function: params (x, y) → (x, y, z)
-    """
-
-    mu_x, mu_y = center
-    sigma_x, sigma_y = sigma
-
-    def embedding(params):
-        x, y = params
-
-        # Egg-carton surface
-        z_eggs = (
-            jnp.cos(x + y) / 2 +
-            jnp.sin(x - y + jnp.pi / 2) / 2 +
-            1
-        )
-
-        # Gaussian envelope
-        z_gaussian = amplitude * jnp.exp(
-            -(((x - mu_x)**2) / (2 * sigma_x**2) +
-              ((y - mu_y)**2) / (2 * sigma_y**2))
-        )
-
-        z = z_eggs * z_gaussian
-
-        return jnp.array([x, y, z])
-
-    return embedding

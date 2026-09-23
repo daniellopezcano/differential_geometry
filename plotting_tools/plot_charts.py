@@ -49,7 +49,7 @@ def plot_chart_region_manifold(
         endpoint_color: Color of endpoints (for 1D).
         endpoint_size: Size of endpoint markers (for 1D).
     """
-    param_dim = chart.manifold.param_dim
+    dim = chart.manifold.dim
     ambient_dim = chart.manifold.ambient_dim
 
     # === Sample parameter region ===
@@ -57,7 +57,7 @@ def plot_chart_region_manifold(
     embedded = surface_manifold.embed(param_points)
 
     # === 1D case: draw embedded curve ===
-    if param_dim == 1:
+    if dim == 1:
         if ambient_dim == 2:
             ax.plot(
                 embedded[:, 0],
@@ -98,7 +98,7 @@ def plot_chart_region_manifold(
                 ax.text(pos[0], pos[1], pos[2], label, fontsize=label_fontsize, color=color)
 
     # === 2D case: draw surface patch and boundary ===
-    elif param_dim == 2 and ambient_dim == 3:
+    elif dim == 2 and ambient_dim == 3:
         X_, Y_, Z_ = embedded[:, 0], embedded[:, 1], embedded[:, 2]
 
         if fill_surface:
@@ -157,7 +157,7 @@ def plot_chart_region_manifold(
 
     else:
         raise NotImplementedError(
-            f"plot_chart_region_manifold not implemented for (param_dim={param_dim}, ambient_dim={ambient_dim})"
+            f"plot_chart_region_manifold not implemented for (dim={dim}, ambient_dim={ambient_dim})"
         )
 
 def _identify_boundary_edges(simplices):
@@ -177,21 +177,6 @@ def _identify_boundary_edges(simplices):
                 edges[edge] = 1
     boundary_edges = np.array([edge for edge, count in edges.items() if count == 1])
     return boundary_edges
-
-def _identify_boundary_vertex_indices(param_points, simplices):
-    """
-    Identify boundary vertex indices robustly from Delaunay simplices.
-
-    Args:
-        param_points: (N, 2) array of points in parameter space.
-        simplices: (M, 3) array of triangle indices from Delaunay.
-
-    Returns:
-        (K,) array of unique boundary vertex indices.
-    """
-    boundary_edges = _identify_boundary_edges(simplices)
-    boundary_vertex_indices = np.unique(boundary_edges)
-    return boundary_vertex_indices
 
 def _reorder_boundary_vertices(boundary_edges, start_idx=None):
     """
@@ -276,7 +261,7 @@ def plot_parametric_region_in_chart_coordinates(
     chart_map = chart.chart_map
     param_space_data = np.asarray(param_space_data)
 
-    if chart.manifold.param_dim != 2:
+    if chart.manifold.dim != 2:
         raise ValueError("This function only supports 2D parameter spaces.")
 
     if tessellated:

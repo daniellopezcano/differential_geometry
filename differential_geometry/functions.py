@@ -5,17 +5,17 @@ import jax.numpy as jnp
 class Function:
     """
     Represents a real-valued function defined on a manifold.
-    The function is defined on the parameter space: f: ℝ^param_dim → ℝ.
+    The function is defined on the parameter space: f: ℝ^dim → ℝ.
     """
 
     def __init__(self, manifold, function_parametric):
         """
         Args:
-            manifold: Manifold object with .param_dim and .ambient_dim.
-            function_parametric: Callable mapping (..., param_dim) → (...,)
+            manifold: Manifold object with .dim and .ambient_dim.
+            function_parametric: Callable mapping (..., dim) → (...,)
         """
         self.manifold = manifold
-        self.param_dim = manifold.param_dim
+        self.dim = manifold.dim
         self.ambient_dim = manifold.ambient_dim
 
         self.valid_combinations = {
@@ -24,24 +24,24 @@ class Function:
             (3, 3)
         }
 
-        if (self.param_dim, self.ambient_dim) not in self.valid_combinations:
-            raise ValueError(f"Unsupported (param_dim, ambient_dim): ({self.param_dim}, {self.ambient_dim})")
+        if (self.dim, self.ambient_dim) not in self.valid_combinations:
+            raise ValueError(f"Unsupported (dim, ambient_dim): ({self.dim}, {self.ambient_dim})")
 
         self._f = jax.jit(function_parametric)
 
     def evaluate_in_param_space(self, params: jnp.ndarray) -> jnp.ndarray:
         """
-        Evaluate f on parameter space: ℝ^{param_dim} → ℝ.
+        Evaluate f on parameter space: ℝ^{dim} → ℝ.
 
         Args:
-            params: Array (..., param_dim)
+            params: Array (..., dim)
 
         Returns:
             Array (...,) of function values.
         """
         params = jnp.asarray(params)
-        if params.shape[-1] != self.param_dim:
-            raise ValueError(f"Expected shape (..., {self.param_dim}), got {params.shape}")
+        if params.shape[-1] != self.dim:
+            raise ValueError(f"Expected shape (..., {self.dim}), got {params.shape}")
         return jax.vmap(self._f)(params)
 
     def evaluate_on_manifold(self, params: jnp.ndarray) -> jnp.ndarray:
@@ -49,7 +49,7 @@ class Function:
         Alias of evaluate_in_param_space for conceptual clarity.
 
         Args:
-            params: (..., param_dim)
+            params: (..., dim)
 
         Returns:
             (...,) real values.

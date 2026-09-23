@@ -1,3 +1,4 @@
+import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
@@ -8,6 +9,13 @@ import numpy as np
 
 from plotting_tools.basic_plotting_tools import Arrow3D
 
+def _resolve_cmap(cmap):
+    """Accept a colormap name (str) or a Matplotlib Colormap object."""
+    if isinstance(cmap, mcolors.Colormap):
+        return cmap                      # e.g. tc.sunset, tc.colormaps["sunset"]
+    if isinstance(cmap, str):
+        return matplotlib.colormaps[cmap]  # e.g. "viridis"
+    raise TypeError(f"cmap must be a str or a matplotlib Colormap, got {type(cmap)}")
 
 def plot_manifold(
     ax,
@@ -38,13 +46,10 @@ def plot_manifold(
     Plot a manifold embedded in 2D or 3D, optionally colored by a scalar function.
     """
 
-    param_dim = manifold.param_dim
+    dim = manifold.dim
     ambient_dim = manifold.ambient_dim
 
-    if (param_dim, ambient_dim) == (3, 3):
-        raise NotImplementedError("3D volume rendering is not implemented (TODO).")
-
-    def clean_3d_axes(ax):
+    def _clean_3d_axes(ax):
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_zticks([])
@@ -61,7 +66,7 @@ def plot_manifold(
         ax.yaxis.pane.set_visible(False)
         ax.zaxis.pane.set_visible(False)
 
-    def clean_2d_axes(ax):
+    def _clean_2d_axes(ax):
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_aspect("equal")
@@ -71,158 +76,112 @@ def plot_manifold(
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-    if param_dim == 1:
+    if dim == 1:
         t = jnp.linspace(xmin, xmax, resolution).reshape(-1, 1)
         embedded = manifold.embed(t)
         if ambient_dim == 2:
             ax.plot(embedded[:, 0], embedded[:, 1], color=color, alpha=alpha)
-            clean_2d_axes(ax)
+            _clean_2d_axes(ax)
         elif ambient_dim == 3:
             ax.plot3D(embedded[:, 0], embedded[:, 1], embedded[:, 2], color=color, alpha=alpha)
-            clean_3d_axes(ax)
+            _clean_3d_axes(ax)
         if label:
             idx = resolution // 2
             pos = embedded[idx]
             ax.text(*pos, label, fontsize=label_fontsize, color=color)
 
-    elif param_dim == 2:
+    elif (dim == 2) and (ambient_dim == 3):
         x = jnp.linspace(xmin, xmax, resolution)
         y = jnp.linspace(ymin, ymax, resolution)
         XX, YY = jnp.meshgrid(x, y)
         param_points = jnp.stack([XX.ravel(), YY.ravel()], axis=-1)
         embedded = manifold.embed(param_points)
 
-        if ambient_dim == 2:
-            X = embedded[:, 0].reshape(XX.shape)
-            Y = embedded[:, 1].reshape(XX.shape)
-            if function is not None:
-                F_vals = function.evaluate_in_param_space(param_points).reshape(XX.shape)
-                cmap_obj = cm.get_cmap(cmap)
-                norm = mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max()))
-                ax.contourf(X, Y, F_vals, levels=50, cmap=cmap_obj)
+        X = embedded[:, 0].reshape(XX.shape)
+        Y = embedded[:, 1].reshape(XX.shape)
+        Z = embedded[:, 2].reshape(XX.shape)
+        if function is not None:
+            F_vals = function.evaluate_in_param_space(param_points).reshape(XX.shape)
+            norm = mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max()))
+            cmap_obj = _resolve_cmap(cmap)
+            face_colors = cmap_obj(norm(F_vals))
 
-                if inset_colorbar:
-                    cbax = inset_axes(
-                        ax,
-                        width=inset_size[0],
-                        height=inset_size[1],
-                        loc='lower left',
-                        bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
-                        bbox_transform=ax.transAxes,
-                        borderpad=0
-                    )
-                    mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
-                    mappable.set_array(F_vals)
-                    cbar = plt.colorbar(mappable, cax=cbax, orientation=colorbar_orientation)
-                    cbar.ax.tick_params(labelsize=8)
-                    cbar.outline.set_visible(False)
-                    for spine in cbax.spines.values():
-                        spine.set_edgecolor(inset_border_color)
-                        spine.set_linewidth(1.0)
-                    cbax.set_facecolor(inset_box_color)
-                    cbax.patch.set_alpha(inset_box_alpha)
-                    if label_function:
-                        if colorbar_orientation == "horizontal":
-                            if label_colorbar_position == "top":
-                                cbax.set_title(label_function, fontsize=10, pad=4)
-                            elif label_colorbar_position == "bottom":
-                                cbax.set_xlabel(label_function, fontsize=10, labelpad=4)
-                        else:
-                            if label_colorbar_position == "right":
-                                cbax.set_ylabel(label_function, fontsize=10, rotation=-90, labelpad=10)
-                            elif label_colorbar_position == "left":
-                                cbax.yaxis.set_label_position("left")
-                                cbax.set_ylabel(label_function, fontsize=10, rotation=90, labelpad=10)
-            else:
-                ax.contour(X, Y, levels=10, colors=color, linewidths=1)
-            clean_2d_axes(ax)
+            surface = ax.plot_surface(
+                X, Y, Z,
+                facecolors=face_colors,
+                edgecolor=edgecolor,
+                linewidth=0.,
+                antialiased=False,
+                shade=False,
+                alpha=alpha
+            )
 
-        elif ambient_dim == 3:
-            X = embedded[:, 0].reshape(XX.shape)
-            Y = embedded[:, 1].reshape(XX.shape)
-            Z = embedded[:, 2].reshape(XX.shape)
-            if function is not None:
-                F_vals = function.evaluate_in_param_space(param_points).reshape(XX.shape)
-                norm = mcolors.Normalize(vmin=float(F_vals.min()), vmax=float(F_vals.max()))
-                cmap_obj = cm.get_cmap(cmap)
-                face_colors = cmap_obj(norm(F_vals))
-
-                surface = ax.plot_surface(
-                    X, Y, Z,
-                    facecolors=face_colors,
-                    edgecolor=edgecolor,
-                    linewidth=0.,
-                    antialiased=False,
-                    shade=False,
-                    alpha=alpha
+            if inset_colorbar:
+                cbax = inset_axes(
+                    ax,
+                    width=inset_size[0],
+                    height=inset_size[1],
+                    loc='lower left',
+                    bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+                    bbox_transform=ax.transAxes,
+                    borderpad=0
                 )
+                mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+                mappable.set_array(F_vals)
+                cbar = plt.colorbar(mappable, cax=cbax, orientation=colorbar_orientation)
+                cbar.ax.tick_params(labelsize=8)
+                cbar.outline.set_visible(False)
+                for spine in cbax.spines.values():
+                    spine.set_edgecolor(inset_border_color)
+                    spine.set_linewidth(1.0)
+                cbax.set_facecolor(inset_box_color)
+                cbax.patch.set_alpha(inset_box_alpha)
+                if label_function:
+                    if colorbar_orientation == "horizontal":
+                        if label_colorbar_position == "top":
+                            cbax.set_title(label_function, fontsize=10, pad=4)
+                        elif label_colorbar_position == "bottom":
+                            cbax.set_xlabel(label_function, fontsize=10, labelpad=4)
+                    else:
+                        if label_colorbar_position == "right":
+                            cbax.set_ylabel(label_function, fontsize=10, rotation=-90, labelpad=10)
+                        elif label_colorbar_position == "left":
+                            cbax.yaxis.set_label_position("left")
+                            cbax.set_ylabel(label_function, fontsize=10, rotation=90, labelpad=10)
 
-                if inset_colorbar:
-                    cbax = inset_axes(
-                        ax,
-                        width=inset_size[0],
-                        height=inset_size[1],
-                        loc='lower left',
-                        bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
-                        bbox_transform=ax.transAxes,
-                        borderpad=0
-                    )
-                    mappable = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
-                    mappable.set_array(F_vals)
-                    cbar = plt.colorbar(mappable, cax=cbax, orientation=colorbar_orientation)
-                    cbar.ax.tick_params(labelsize=8)
-                    cbar.outline.set_visible(False)
-                    for spine in cbax.spines.values():
-                        spine.set_edgecolor(inset_border_color)
-                        spine.set_linewidth(1.0)
-                    cbax.set_facecolor(inset_box_color)
-                    cbax.patch.set_alpha(inset_box_alpha)
-                    if label_function:
-                        if colorbar_orientation == "horizontal":
-                            if label_colorbar_position == "top":
-                                cbax.set_title(label_function, fontsize=10, pad=4)
-                            elif label_colorbar_position == "bottom":
-                                cbax.set_xlabel(label_function, fontsize=10, labelpad=4)
-                        else:
-                            if label_colorbar_position == "right":
-                                cbax.set_ylabel(label_function, fontsize=10, rotation=-90, labelpad=10)
-                            elif label_colorbar_position == "left":
-                                cbax.yaxis.set_label_position("left")
-                                cbax.set_ylabel(label_function, fontsize=10, rotation=90, labelpad=10)
+        else:
+            surface = ax.plot_surface(
+                X, Y, Z,
+                color=color,
+                edgecolor=edgecolor,
+                alpha=alpha,
+                antialiased=True,
+                linewidth=0.2 if edgecolor != "none" else 0
+            )
+        _clean_3d_axes(ax)
 
+        if label is not None:
+            X_flat, Y_flat, Z_flat = X.ravel(), Y.ravel(), Z.ravel()
+            if label_position == "center":
+                pos = (jnp.mean(X_flat), jnp.mean(Y_flat), jnp.mean(Z_flat))
+            elif label_position == "top":
+                idx = jnp.argmax(Z_flat)
+                pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
+            elif label_position == "bottom":
+                idx = jnp.argmin(Z_flat)
+                pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
+            elif label_position == "right":
+                idx = jnp.argmax(X_flat)
+                pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
+            elif label_position == "left":
+                idx = jnp.argmin(X_flat)
+                pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
             else:
-                surface = ax.plot_surface(
-                    X, Y, Z,
-                    color=color,
-                    edgecolor=edgecolor,
-                    alpha=alpha,
-                    antialiased=True,
-                    linewidth=0.2 if edgecolor != "none" else 0
-                )
-            clean_3d_axes(ax)
-
-            if label is not None:
-                X_flat, Y_flat, Z_flat = X.ravel(), Y.ravel(), Z.ravel()
-                if label_position == "center":
-                    pos = (jnp.mean(X_flat), jnp.mean(Y_flat), jnp.mean(Z_flat))
-                elif label_position == "top":
-                    idx = jnp.argmax(Z_flat)
-                    pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-                elif label_position == "bottom":
-                    idx = jnp.argmin(Z_flat)
-                    pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-                elif label_position == "right":
-                    idx = jnp.argmax(X_flat)
-                    pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-                elif label_position == "left":
-                    idx = jnp.argmin(X_flat)
-                    pos = (X_flat[idx], Y_flat[idx], Z_flat[idx])
-                else:
-                    raise ValueError(f"Invalid label_position: {label_position}")
-                ax.text(*pos, label, fontsize=label_fontsize, color="black" if function else color)
+                raise ValueError(f"Invalid label_position: {label_position}")
+            ax.text(*pos, label, fontsize=label_fontsize, color="black" if function else color)
 
     else:
-        raise NotImplementedError(f"Plotting for (param_dim={param_dim}, ambient_dim={ambient_dim}) is not implemented.")
+        raise NotImplementedError(f"Plotting for (dim={dim}, ambient_dim={ambient_dim}) is not implemented.")
 
 def plot_tangent_vectors(
     ax,
@@ -247,9 +206,9 @@ def plot_tangent_vectors(
     Args:
         ax: Matplotlib axis (2D or 3D).
         embedded_points: Array (N, D) — manifold points in ambient space.
-        jacobians: Array (N, param_dim, D) — tangent vectors in ambient space.
+        jacobians: Array (N, dim, D) — tangent vectors in ambient space.
         scale: Scaling factor for arrow lengths.
-        colors: Optional (N, param_dim) list of colors.
+        colors: Optional (N, dim) list of colors.
         arrowstyle: Arrow style for FancyArrowPatch (3D only).
         mutation_scale: Arrowhead size for FancyArrowPatch (3D only).
         linewidth: Line width of arrows.
@@ -257,19 +216,19 @@ def plot_tangent_vectors(
         draw_points: If True, mark base points with scatter.
         point_color: Color for base points.
         point_size: Marker size for base points.
-        labels: Optional list of (N, param_dim) strings to label each arrow.
+        labels: Optional list of (N, dim) strings to label each arrow.
         label_fontsize: Font size for labels.
         label_offset: Offset multiplier for text position along arrow direction.
     """
     import numpy as np
 
     N, D = embedded_points.shape
-    _, param_dim, D2 = jacobians.shape
+    _, dim, D2 = jacobians.shape
     assert D == D2, f"Ambient dim mismatch: got {D} vs {D2}"
 
     for i in range(N):
         base = np.array(embedded_points[i])
-        for j in range(param_dim):
+        for j in range(dim):
             direction = np.array(jacobians[i, j]) * scale
             tip = base + direction
             color = colors[i][j] if colors else "black"
@@ -343,7 +302,7 @@ def plot_tangent_spaces(
     Args:
         ax: Matplotlib axis (2D or 3D).
         embedded_points: (N, D) — manifold points in R^D.
-        jacobians: (N, param_dim, D) — tangent vectors at those points.
+        jacobians: (N, dim, D) — tangent vectors at those points.
         size: Length/extent of tangent lines or planes.
         color: Default color if `colors` is not provided.
         colors: Optional list of shape (N,) with custom color per tangent space.
@@ -356,15 +315,15 @@ def plot_tangent_spaces(
     """
 
     N, D = embedded_points.shape
-    _, param_dim, D2 = jacobians.shape
+    _, dim, D2 = jacobians.shape
     assert D == D2, f"Ambient dim mismatch: got {D} vs {D2}"
-    assert param_dim in [1, 2], "Only param_dim 1 or 2 supported."
+    assert dim in [1, 2], "Only dim 1 or 2 supported."
 
     for i in range(N):
         base = np.array(embedded_points[i])
         local_color = colors[i] if colors else color
 
-        if param_dim == 1:
+        if dim == 1:
             v = np.array(jacobians[i, 0]) / np.linalg.norm(jacobians[i, 0])
             t = np.linspace(-size, size, 10)
             points = base[np.newaxis, :] + t[:, np.newaxis] * v[np.newaxis, :]
@@ -384,7 +343,7 @@ def plot_tangent_spaces(
                     ax.text(offset[0], offset[1], offset[2], labels[i],
                             fontsize=label_fontsize, color=local_color)
 
-        elif param_dim == 2:
+        elif dim == 2:
             assert D == 3, "Tangent planes only supported in 3D"
             v1 = np.array(jacobians[i, 0])
             v2 = np.array(jacobians[i, 1])

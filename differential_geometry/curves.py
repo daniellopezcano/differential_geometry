@@ -13,18 +13,18 @@ class Curve:
         """
         Args:
             manifold: Manifold object with .embed().
-            parametric_function: Function lambda → shape (param_dim,)
+            parametric_function: Function lambda → shape (dim,)
                 mapping a scalar λ to a point in parameter space.
         """
         self.manifold = manifold
         self.parametric_function = parametric_function
 
-        param_dim = manifold.param_dim
+        dim = manifold.dim
         ambient_dim = manifold.ambient_dim
 
         supported_dims = {(1, 2), (1, 3), (2, 2), (2, 3), (3, 3)}
-        if (param_dim, ambient_dim) not in supported_dims:
-            raise ValueError(f"Unsupported curve configuration: ({param_dim}, {ambient_dim}) not in {supported_dims}")
+        if (dim, ambient_dim) not in supported_dims:
+            raise ValueError(f"Unsupported curve configuration: ({dim}, {ambient_dim}) not in {supported_dims}")
 
     def evaluate_in_param_space(self, lambdas):
         """
@@ -34,13 +34,13 @@ class Curve:
             lambdas: Array of λ values (shape (N,)) or scalar.
 
         Returns:
-            Array of shape (N, param_dim) if batched,
-            or (param_dim,) if single lambda.
+            Array of shape (N, dim) if batched,
+            or (dim,) if single lambda.
         """
         lambdas = jnp.atleast_1d(lambdas)
         param_points = jax.vmap(self.parametric_function)(lambdas)
 
-        expected_dim = self.manifold.param_dim
+        expected_dim = self.manifold.dim
         if param_points.shape[-1] != expected_dim:
             raise ValueError(
                 f"parametric_function must return shape (..., {expected_dim}), got {param_points.shape}"
@@ -127,13 +127,13 @@ class Curve:
         lambdas = jnp.asarray(lambdas)
 
         # Step 1: Evaluate parametric function γ(λ)
-        param_points = jax.vmap(self.parametric_function)(lambdas)  # (N, param_dim)
+        param_points = jax.vmap(self.parametric_function)(lambdas)  # (N, dim)
 
         # Step 2: Compute γ'(λ) ∈ T_{γ(λ)}(param space)
-        param_derivs = jax.vmap(jax.jacrev(self.parametric_function))(lambdas)  # (N, param_dim)
+        param_derivs = jax.vmap(jax.jacrev(self.parametric_function))(lambdas)  # (N, dim)
 
-        # Step 3: Compute Jacobian of Φ at γ(λ): DΦ_{γ(λ)} ∈ ℝ^{param_dim × ambient_dim}
-        jacobian = self.manifold.derivatives_at_params(param_points)  # (N, param_dim, ambient_dim)
+        # Step 3: Compute Jacobian of Φ at γ(λ): DΦ_{γ(λ)} ∈ ℝ^{dim × ambient_dim}
+        jacobian = self.manifold.derivatives_at_params(param_points)  # (N, dim, ambient_dim)
 
         # Step 4: Pushforward: DΦ(γ(λ)) · γ'(λ)
         tangents = jnp.einsum("nij,ni->nj", jacobian, param_derivs)  # (N, ambient_dim)
@@ -171,86 +171,3 @@ class Curve:
         normed_tangents = sub_tangents / norms
 
         return sub_positions, normed_tangents
-
-
-
-
-
-
-
-def factory_curve_wiggly(p_x, p_y, amplitude=jnp.pi/6, frequency=jnp.pi):
-    """
-    Returns a parametric curve function γ(λ) passing through (p_x, p_y) at λ = 0.
-
-    Args:
-        p_x, p_y: Base point in parameter space.
-        amplitude: Amplitude of the oscillation in x-direction.
-        frequency: Frequency of the sine oscillation.
-
-    Returns:
-        Function curve(λ) → (x(λ), y(λ))
-    """
-    def curve(lambda_values):
-        x = p_x + amplitude * jnp.sin(frequency * lambda_values)
-        y = p_y + lambda_values
-        return jnp.stack([x, y], axis=-1)
-    
-    return curve
-
-def factory_curve_arching(p_x, p_y, amplitude=jnp.pi/6, frequency=jnp.pi/3):
-    """
-    Returns a parametric curve function δ(λ) passing through (p_x, p_y) at λ = 0.
-
-    Args:
-        p_x, p_y: Base point in parameter space.
-        amplitude: Amplitude of the cosine arch in y-direction.
-        frequency: Frequency of the cosine oscillation.
-
-    Returns:
-        Function curve(λ) → (x(λ), y(λ))
-    """
-    def curve(lambda_values):
-        x = p_x + lambda_values
-        y = p_y + amplitude * (jnp.cos(frequency * lambda_values) - 1.0)  # Shifted cosine
-        return jnp.stack([x, y], axis=-1)
-    
-    return curve
-
-def factory_curve_vertical(p_x, p_y):
-    """
-    Returns a function representing the vertical line x = p_x.
-
-    Args:
-        p_x: x-coordinate (fixed).
-        p_y: y-coordinate the curve passes through (lambda=0 reference point).
-
-    Returns:
-        A parametric function of lambda (λ) where y = λ + p_y, x = p_x.
-    """
-    def curve(lambda_values):
-        x = jnp.full_like(lambda_values, p_x)
-        y = p_y + lambda_values
-        return jnp.stack([x, y], axis=-1)
-    return curve
-
-
-def factory_curve_circle(p_x, p_y):
-    """
-    Returns a function representing a circle centered at (0, 0) 
-    with radius sqrt(p_x^2 + p_y^2), passing through (p_x, p_y).
-
-    Args:
-        p_x: x-coordinate.
-        p_y: y-coordinate.
-
-    Returns:
-        A parametric function of lambda (angle parameter λ).
-    """
-    r = jnp.sqrt(p_x**2 + p_y**2)
-
-    def curve(lambda_values):
-        x = r * jnp.cos(lambda_values)
-        y = r * jnp.sin(lambda_values)
-        return jnp.stack([x, y], axis=-1)
-
-    return curve

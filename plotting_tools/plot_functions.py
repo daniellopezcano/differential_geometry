@@ -1,5 +1,6 @@
 # Re-import necessary libraries after kernel reset
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
@@ -7,6 +8,15 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from scipy.spatial import Delaunay
+
+
+def _resolve_cmap(cmap):
+    """Accept a colormap name (str) or a Matplotlib Colormap object."""
+    if isinstance(cmap, mcolors.Colormap):
+        return cmap                      # e.g. tc.sunset, tc.colormaps["sunset"]
+    if isinstance(cmap, str):
+        return matplotlib.colormaps[cmap]  # e.g. "viridis"
+    raise TypeError(f"cmap must be a str or a matplotlib Colormap, got {type(cmap)}")
 
 # Define the updated function
 def plot_parametric_function_in_chart_coordinates(
@@ -35,7 +45,7 @@ def plot_parametric_function_in_chart_coordinates(
     param_space_data = np.asarray(param_space_data)
     function_values = np.asarray(function_values)
 
-    if chart.manifold.param_dim != 2:
+    if chart.manifold.dim != 2:
         raise ValueError("Only implemented for 2D parameter spaces.")
 
     if simplices is None:
@@ -51,7 +61,7 @@ def plot_parametric_function_in_chart_coordinates(
     triangles_values = function_values[simplices][valid_mask]
 
     norm = mcolors.Normalize(vmin=function_values.min(), vmax=function_values.max())
-    cmap_func = cm.get_cmap(cmap)
+    cmap_func = _resolve_cmap(cmap)
 
     for tri_pts, tri_vals in zip(triangles_chart, triangles_values):
         color = cmap_func(norm(np.mean(tri_vals)))
