@@ -191,6 +191,7 @@ def plot_curve_tangents_in_chart(
     q = ax.quiver(
         sub_coords[:, 0], sub_coords[:, 1],
         normed_tangents[:, 0], normed_tangents[:, 1],
+        angles="xy",
         color=color, scale=scale, width=width
     )
 
