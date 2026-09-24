@@ -2,8 +2,12 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import matplotlib.tri as mtri
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from scipy.spatial import Delaunay
 
@@ -311,6 +315,116 @@ def plot_covector_on_manifold(
     return pushforward
 
 
+# ==========================================================
+# === Colormap helpers for level sets
+# ==========================================================
+
+def _resolve_cmap(cmap):
+    """Accept a colormap name (str) or a Matplotlib Colormap object."""
+    if isinstance(cmap, mcolors.Colormap):
+        return cmap                      # e.g. tc.sunset, tc.colormaps["sunset"]
+    if isinstance(cmap, str):
+        return matplotlib.colormaps[cmap]  # e.g. "Blues"
+    raise TypeError(f"cmap must be a str or a matplotlib Colormap, got {type(cmap)}")
+
+
+def _truncate_cmap(cmap_object, cmap_range=(0.0, 1.0)):
+    """
+    Restrict a colormap to the sub-interval cmap_range of [0, 1].
+
+    Useful for sequential colormaps such as "Blues", whose lower end is almost
+    white and would make the lowest level sets invisible: cmap_range=(0.35, 1.0)
+    keeps only the visible part.
+    """
+    low, high = cmap_range
+    if (low, high) == (0.0, 1.0):
+        return cmap_object
+    return mcolors.ListedColormap(
+        cmap_object(np.linspace(low, high, 256)), name=f"{cmap_object.name}_truncated"
+    )
+
+
+def _add_level_colorbar_inset(
+    ax,
+    norm,
+    cmap_object,
+    level_values,
+    mark_levels=True,
+    level_mark_color="black",
+    level_mark_linewidth=0.8,
+    inset_position=(0.02, 0.02),
+    inset_size=(2.0, 0.15),
+    colorbar_orientation="horizontal",
+    label_colorbar=None,
+    label_colorbar_position="top",
+    label_fontsize=18,
+    tick_fontsize=14,
+    inset_box_alpha=0.8,
+    inset_box_color="white",
+    inset_border_color="black",
+):
+    """
+    Colorbar inset for a family of level sets, in the same style as the insets of
+    plot_manifolds / plot_functions. Each drawn level can be marked on the bar.
+
+    Returns:
+        The Matplotlib Colorbar.
+    """
+    colorbar_ax = inset_axes(
+        ax,
+        width=inset_size[0],
+        height=inset_size[1],
+        loc="lower left",
+        bbox_to_anchor=(inset_position[0], inset_position[1], 1, 1),
+        bbox_transform=ax.transAxes,
+        borderpad=0,
+    )
+
+    mappable = cm.ScalarMappable(norm=norm, cmap=cmap_object)
+    mappable.set_array(np.asarray(level_values))
+    colorbar = plt.colorbar(mappable, cax=colorbar_ax, orientation=colorbar_orientation)
+    colorbar.ax.tick_params(labelsize=tick_fontsize)
+    colorbar.outline.set_visible(False)
+
+    # === Mark the value of each drawn level set on the bar ===
+    if mark_levels:
+        visible_levels = [
+            level for level in np.asarray(level_values)
+            if norm.vmin <= level <= norm.vmax
+        ]
+        if len(visible_levels) > 0:
+            colorbar.add_lines(
+                visible_levels,
+                colors=[level_mark_color] * len(visible_levels),
+                linewidths=[level_mark_linewidth] * len(visible_levels),
+            )
+
+    for spine in colorbar_ax.spines.values():
+        spine.set_edgecolor(inset_border_color)
+        spine.set_linewidth(1.0)
+    colorbar_ax.set_facecolor(inset_box_color)
+    colorbar_ax.patch.set_alpha(inset_box_alpha)
+
+    if label_colorbar:
+        if colorbar_orientation == "horizontal":
+            if label_colorbar_position == "top":
+                colorbar_ax.set_title(label_colorbar, fontsize=label_fontsize, pad=4)
+            elif label_colorbar_position == "bottom":
+                colorbar_ax.set_xlabel(label_colorbar, fontsize=label_fontsize, labelpad=4)
+            else:
+                raise ValueError("Label position for horizontal colorbar must be 'top' or 'bottom'.")
+        else:
+            if label_colorbar_position == "right":
+                colorbar_ax.set_ylabel(label_colorbar, fontsize=label_fontsize, rotation=-90, labelpad=10)
+            elif label_colorbar_position == "left":
+                colorbar_ax.yaxis.set_label_position("left")
+                colorbar_ax.set_ylabel(label_colorbar, fontsize=label_fontsize, rotation=90, labelpad=10)
+            else:
+                raise ValueError("Label position for vertical colorbar must be 'left' or 'right'.")
+
+    return colorbar
+
+
 def plot_function_level_sets_in_chart(
     ax,
     chart,
@@ -320,12 +434,27 @@ def plot_function_level_sets_in_chart(
     simplices=None,
     max_edge=None,
     color="black",
+    cmap=None,
+    cmap_range=(0.0, 1.0),
+    vmin=None,
+    vmax=None,
     linestyles="solid",
     linewidths=0.8,
     alpha=0.6,
     zorder=1,
     label_levels=False,
     label_fontsize=7,
+    # === Inset colorbar options (only used when cmap is given) ===
+    inset_colorbar=True,
+    inset_position=(0.02, 0.02),
+    inset_size=(2.0, 0.15),
+    colorbar_orientation="horizontal",
+    label_colorbar=None,
+    label_colorbar_position="top",
+    colorbar_mark_levels=True,
+    inset_box_alpha=0.8,
+    inset_box_color="white",
+    inset_border_color="black",
 ):
     """
     Plot the level sets of a scalar field in chart coordinates.
@@ -336,6 +465,10 @@ def plot_function_level_sets_in_chart(
     that become degenerate or extremely stretched under the chart map (e.g.
     across the branch cut of a polar chart) are masked out.
 
+    If a colormap is given, each level set is colored according to its value
+    and a colorbar inset is added; its position is set by `inset_position`, so
+    that several families of level sets can share the same axis.
+
     Args:
         ax: Matplotlib 2D axis.
         chart: Chart object.
@@ -345,13 +478,27 @@ def plot_function_level_sets_in_chart(
         simplices: Optional Delaunay simplices on param_space_data.
         max_edge: Chart-space edge length above which a triangle is masked.
             If None, it is set to 10 times the median edge length.
-        color: Color of the level lines.
+        color: Color of the level lines (used only if cmap is None).
+        cmap: Optional colormap name or object (e.g. "Blues", tc.colormaps["sunset"]);
+            colors each level set by its value.
+        cmap_range: Sub-interval of the colormap actually used, e.g. (0.35, 1.0)
+            to skip the nearly-white end of sequential colormaps.
+        vmin, vmax: Optional bounds of the color normalization (default: the
+            range of the drawn levels). Useful to share a scale between plots.
         linestyles: Line style of the level lines.
         linewidths: Line width of the level lines.
         alpha: Opacity.
         zorder: Drawing order.
         label_levels: If True, adds inline labels with the level values.
         label_fontsize: Font size of the inline labels.
+        inset_colorbar: Whether to draw the colorbar inset (requires cmap).
+        inset_position: (x, y) — lower-left corner of the inset, in axes fraction.
+        inset_size: (width, height) — size of the inset, in inches.
+        colorbar_orientation: 'horizontal' or 'vertical'.
+        label_colorbar: Optional label of the colorbar (e.g. r"$f$").
+        label_colorbar_position: 'top'/'bottom' (horizontal) or 'left'/'right' (vertical).
+        colorbar_mark_levels: If True, marks each drawn level value on the colorbar.
+        inset_box_alpha, inset_box_color, inset_border_color: Inset box styling.
 
     Returns:
         The Matplotlib TriContourSet.
@@ -389,18 +536,37 @@ def plot_function_level_sets_in_chart(
     mask = (edge_lengths > max_edge) | (~finite_points[simplices].all(axis=1))
     triangulation.set_mask(mask)
 
+    # === Single color or colormap ===
+    if cmap is None:
+        color_kwargs = dict(colors=color)
+    else:
+        cmap_object = _truncate_cmap(_resolve_cmap(cmap), cmap_range)
+        color_kwargs = dict(cmap=cmap_object, vmin=vmin, vmax=vmax)
+
     contour_set = ax.tricontour(
         triangulation, values,
         levels=levels,
-        colors=color,
         linestyles=linestyles,
         linewidths=linewidths,
         alpha=alpha,
         zorder=zorder,
+        **color_kwargs,
     )
 
     if label_levels:
         ax.clabel(contour_set, inline=True, fontsize=label_fontsize, fmt="%.1f")
+
+    # === Colorbar inset ===
+    if cmap is not None and inset_colorbar:
+        _add_level_colorbar_inset(
+            ax, contour_set.norm, contour_set.cmap, contour_set.levels,
+            mark_levels=colorbar_mark_levels,
+            inset_position=inset_position, inset_size=inset_size,
+            colorbar_orientation=colorbar_orientation,
+            label_colorbar=label_colorbar, label_colorbar_position=label_colorbar_position,
+            inset_box_alpha=inset_box_alpha, inset_box_color=inset_box_color,
+            inset_border_color=inset_border_color,
+        )
 
     return contour_set
 
@@ -414,10 +580,25 @@ def plot_function_level_sets_on_manifold(
     xmin=-jnp.pi, xmax=jnp.pi,
     ymin=-jnp.pi, ymax=jnp.pi,
     color="black",
+    cmap=None,
+    cmap_range=(0.0, 1.0),
+    vmin=None,
+    vmax=None,
     linestyle="solid",
     linewidth=1.0,
     alpha=0.8,
     zorder=3,
+    # === Inset colorbar options (only used when cmap is given) ===
+    inset_colorbar=True,
+    inset_position=(0.02, 0.02),
+    inset_size=(2.0, 0.15),
+    colorbar_orientation="horizontal",
+    label_colorbar=None,
+    label_colorbar_position="top",
+    colorbar_mark_levels=True,
+    inset_box_alpha=0.8,
+    inset_box_color="white",
+    inset_border_color="black",
 ):
     """
     Plot the level sets of a scalar field directly on the embedded manifold.
@@ -426,6 +607,10 @@ def plot_function_level_sets_on_manifold(
     algorithm (on an auxiliary figure that is immediately closed), and each
     resulting polyline is then embedded in the ambient space.
 
+    If a colormap is given, each level set is colored according to its value
+    and a colorbar inset is added; its position is set by `inset_position`, so
+    that several families of level sets can share the same axis.
+
     Args:
         ax: Matplotlib 3D axis.
         manifold: Manifold object with embed().
@@ -433,11 +618,25 @@ def plot_function_level_sets_on_manifold(
         levels: Number of level sets, or explicit list of levels.
         resolution: Grid resolution used in parameter space.
         xmin, xmax, ymin, ymax: Bounds of the parameter-space grid.
-        color: Color of the level lines.
+        color: Color of the level lines (used only if cmap is None).
+        cmap: Optional colormap name or object (e.g. "Blues", tc.colormaps["sunset"]);
+            colors each level set by its value.
+        cmap_range: Sub-interval of the colormap actually used, e.g. (0.35, 1.0)
+            to skip the nearly-white end of sequential colormaps.
+        vmin, vmax: Optional bounds of the color normalization (default: the
+            range of the drawn levels). Useful to share a scale between plots.
         linestyle: Line style of the level lines.
         linewidth: Line width of the level lines.
         alpha: Opacity.
         zorder: Drawing order.
+        inset_colorbar: Whether to draw the colorbar inset (requires cmap).
+        inset_position: (x, y) — lower-left corner of the inset, in axes fraction.
+        inset_size: (width, height) — size of the inset, in inches.
+        colorbar_orientation: 'horizontal' or 'vertical'.
+        label_colorbar: Optional label of the colorbar (e.g. r"$f$").
+        label_colorbar_position: 'top'/'bottom' (horizontal) or 'left'/'right' (vertical).
+        colorbar_mark_levels: If True, marks each drawn level value on the colorbar.
+        inset_box_alpha, inset_box_color, inset_border_color: Inset box styling.
 
     Returns:
         Array with the level values that were drawn.
@@ -456,16 +655,39 @@ def plot_function_level_sets_on_manifold(
     all_segments = contour_set.allsegs
     plt.close(auxiliary_figure)
 
+    # === One color per level: single color, or colormap evaluated at the level value ===
+    if cmap is None:
+        level_colors = [color] * len(level_values)
+    else:
+        cmap_object = _truncate_cmap(_resolve_cmap(cmap), cmap_range)
+        norm = mcolors.Normalize(
+            vmin=float(level_values.min()) if vmin is None else vmin,
+            vmax=float(level_values.max()) if vmax is None else vmax,
+        )
+        level_colors = [cmap_object(norm(level)) for level in level_values]
+
     # === Embed each polyline and draw it on the manifold ===
-    for segments in all_segments:
+    for segments, level_color in zip(all_segments, level_colors):
         for segment in segments:
             if len(segment) < 2:
                 continue
             embedded = np.asarray(manifold.embed(jnp.array(segment)))
             ax.plot(
                 embedded[:, 0], embedded[:, 1], embedded[:, 2],
-                color=color, linestyle=linestyle, linewidth=linewidth,
+                color=level_color, linestyle=linestyle, linewidth=linewidth,
                 alpha=alpha, zorder=zorder,
             )
+
+    # === Colorbar inset ===
+    if cmap is not None and inset_colorbar:
+        _add_level_colorbar_inset(
+            ax, norm, cmap_object, level_values,
+            mark_levels=colorbar_mark_levels,
+            inset_position=inset_position, inset_size=inset_size,
+            colorbar_orientation=colorbar_orientation,
+            label_colorbar=label_colorbar, label_colorbar_position=label_colorbar_position,
+            inset_box_alpha=inset_box_alpha, inset_box_color=inset_box_color,
+            inset_border_color=inset_border_color,
+        )
 
     return level_values
